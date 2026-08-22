@@ -123,8 +123,6 @@ function render() {
   const openCount = reports.filter(report => report.status === 'open').length;
   $('#open-count').textContent = openCount;
   $('#all-count').textContent = reports.length;
-  // Start on a real report so the moderator never lands on an empty detail panel.
-  if (!selectedID && visible.length) selectedID = visible[0].id;
   list.replaceChildren();
   if (!visible.length) {
     list.innerHTML = '<div class="empty-list">No reports match these filters.</div>';
@@ -143,7 +141,7 @@ function render() {
       node.querySelector('h2').textContent = report.target?.title || 'Untitled report';
       node.querySelector('.report-excerpt').textContent = report.target?.excerpt || report.details || 'No submitted context.';
       node.querySelector('.reason').textContent = report.reason || 'No reason';
-      node.querySelector('.reported-name').textContent = `Open report → ${report.reportedUser?.displayName || 'Unknown user'}`;
+      node.querySelector('.reported-name').textContent = `Reported: ${report.reportedUser?.displayName || 'Unknown user'}`;
       list.append(node);
     });
   }
