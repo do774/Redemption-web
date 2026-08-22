@@ -7,6 +7,7 @@
   <meta name="description" content="Redemption moderation dashboard">
   <title>Moderation — Redemption</title>
   <link rel="stylesheet" href="admin.css">
+  <link rel="stylesheet" href="admin-dark.css">
   <style>[hidden]{display:none!important}</style>
 </head>
 <body>
@@ -37,7 +38,7 @@
       <div class="dashboard-layout">
         <aside class="sidebar"><div class="sidebar-head"><p class="eyebrow">Queue</p><h2>Reports</h2></div><button id="open-filter" class="queue-button active"><span>Open</span><b id="open-count">0</b></button><button id="all-filter" class="queue-button"><span>All reports</span><b id="all-count">0</b></button><p class="sidebar-help">Every decision is saved to the report’s audit log.</p></aside>
         <section class="content-area"><div class="content-top"><div><p class="eyebrow">Trust &amp; safety</p><h1>Review reports</h1></div><button id="refresh" class="icon-button" aria-label="Refresh reports" title="Refresh reports">↻</button></div>
-          <div class="filters"><label class="search"><span>⌕</span><input id="search" type="search" placeholder="Search people, content or email"></label><label>Status<select id="status-filter"><option value="open">Open</option><option value="all">All statuses</option><option value="reviewing">Reviewing</option><option value="actioned">Actioned</option><option value="dismissed">Dismissed</option></select></label><label>Type<select id="type-filter"><option value="all">All types</option><option value="post">Posts</option><option value="comment">Comments</option><option value="user">Users</option></select></label><label>Priority<select id="priority-filter"><option value="all">All priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></label></div>
+          <div class="filters"><label class="search"><input id="search" type="search" placeholder="Search people, content or email"></label><label>Status<select id="status-filter"><option value="open">Open</option><option value="all">All statuses</option><option value="reviewing">Reviewing</option><option value="actioned">Actioned</option><option value="dismissed">Dismissed</option></select></label><label>Type<select id="type-filter"><option value="all">All types</option><option value="post">Posts</option><option value="comment">Comments</option><option value="user">Users</option></select></label><label>Priority<select id="priority-filter"><option value="all">All priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></label></div>
           <p id="load-message" class="load-message" aria-live="polite">Loading reports…</p>
           <div id="report-list" class="report-list" aria-live="polite"></div>
         </section>
