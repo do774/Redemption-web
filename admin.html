@@ -20,7 +20,8 @@
           <label>Email<input id="email" type="email" autocomplete="email" required placeholder="you@example.com"></label>
           <label>Password<input id="password" type="password" autocomplete="current-password" required placeholder="••••••••"></label>
           <p id="login-error" class="form-error" role="alert" hidden></p>
-          <button class="button primary" type="submit">Sign in securely</button>
+          <p id="login-status" class="form-error" aria-live="polite" style="color:var(--muted)">Preparing secure sign-in…</p>
+          <button id="login-submit" class="button primary" type="submit" disabled>Sign in securely</button>
         </form>
         <p class="login-note">Access is enforced by Firebase Security Rules. A direct link is not enough to view report data.</p>
       </div>
@@ -44,6 +45,17 @@
     </section>
   </main>
   <template id="report-template"><article class="report-row"><button class="report-select"><div class="report-row-top"><span class="priority-dot"></span><span class="report-type"></span><time></time></div><h2></h2><p class="report-excerpt"></p><div class="report-meta"><span class="reason"></span><span class="reported-name"></span></div></button></article></template>
+  <script>
+    window.addEventListener('error', event => {
+      const error = document.getElementById('login-error');
+      const status = document.getElementById('login-status');
+      if (error && status && event.target && event.target.tagName === 'SCRIPT') {
+        error.textContent = 'The secure sign-in module could not load. Check your internet connection and reload this page.';
+        error.hidden = false;
+        status.textContent = 'Sign-in unavailable.';
+      }
+    }, true);
+  </script>
   <script type="module" src="admin.js"></script>
 </body>
 </html>

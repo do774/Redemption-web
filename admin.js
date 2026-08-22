@@ -20,6 +20,8 @@ const deniedScreen = $('#access-denied');
 const dashboard = $('#dashboard');
 const list = $('#report-list');
 const detail = $('#detail-panel');
+const loginButton = $('#login-submit');
+const loginStatus = $('#login-status');
 const filters = { status: 'open', type: 'all', priority: 'all', search: '' };
 let reports = [];
 let selectedID = null;
@@ -30,11 +32,18 @@ $('#login-form').addEventListener('submit', async event => {
   event.preventDefault();
   const error = $('#login-error');
   error.hidden = true;
+  loginButton.disabled = true;
+  loginButton.textContent = 'Signing in…';
+  loginStatus.textContent = 'Contacting Firebase…';
   try {
     await signInWithEmailAndPassword(auth, $('#email').value.trim(), $('#password').value);
   } catch (exception) {
     error.textContent = friendlyAuthError(exception);
     error.hidden = false;
+    loginStatus.textContent = 'Sign-in was not completed.';
+  } finally {
+    loginButton.disabled = false;
+    loginButton.textContent = 'Sign in securely';
   }
 });
 
@@ -51,7 +60,10 @@ $('#all-filter').addEventListener('click', () => setQueue('all'));
 onAuthStateChanged(auth, async user => {
   stopReports();
   currentAdmin = null;
-  if (!user) return showScreen(loginScreen);
+  if (!user) {
+    loginStatus.textContent = 'Ready to sign in.';
+    return showScreen(loginScreen);
+  }
   try {
     const token = await user.getIdTokenResult(true);
     if (token.claims.admin !== true) return showScreen(deniedScreen);
@@ -64,6 +76,9 @@ onAuthStateChanged(auth, async user => {
     showScreen(deniedScreen);
   }
 });
+
+loginButton.disabled = false;
+loginStatus.textContent = 'Ready to sign in.';
 
 function showScreen(screen) {
   [loginScreen, deniedScreen, dashboard].forEach(element => { element.hidden = element !== screen; });
