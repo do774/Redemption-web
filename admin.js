@@ -1,5 +1,5 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js';
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/12.17.1/firebase-auth.js';
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, signOut } from 'https://www.gstatic.com/firebasejs/12.17.1/firebase-auth.js';
 import { getFirestore, collection, onSnapshot, orderBy, query, doc, runTransaction, serverTimestamp, Timestamp } from 'https://www.gstatic.com/firebasejs/12.17.1/firebase-firestore.js';
 
 // Firebase web configuration is public by design. Database access is protected by Auth + Firestore Security Rules.
@@ -51,6 +51,15 @@ $('#login-form').addEventListener('submit', async event => {
     loginButton.disabled = false;
     loginButton.textContent = 'Sign in securely';
   }
+});
+
+$('#google-login').addEventListener('click', async () => {
+  const error = $('#login-error'); error.hidden = true;
+  const button = $('#google-login'); button.disabled = true;
+  loginStatus.textContent = 'Opening Google sign-in…';
+  try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+  catch (exception) { error.textContent = friendlyAuthError(exception); error.hidden = false; loginStatus.textContent = 'Sign-in was not completed.'; }
+  finally { button.disabled = false; }
 });
 
 $('#signout').addEventListener('click', () => signOut(auth));

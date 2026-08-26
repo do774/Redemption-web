@@ -30,6 +30,7 @@
     .user-row small{max-width:230px;overflow:hidden;color:var(--muted);font-size:.76rem;text-overflow:ellipsis;white-space:nowrap}
     @media(max-width:830px){.stats-grid{grid-template-columns:1fr}}
     @media(max-width:520px){.user-table-head,.user-row{align-items:flex-start;flex-direction:column}.user-row small{max-width:100%}}
+    .google-button{width:100%;margin-top:10px;border:1px solid var(--line);background:var(--paper);color:var(--ink)}
   </style>
 </head>
 <body>
@@ -47,6 +48,7 @@
           <p id="login-status" class="form-error" aria-live="polite" style="color:var(--muted)">Preparing secure sign-in…</p>
           <button id="login-submit" class="button primary" type="submit" disabled>Sign in securely</button>
         </form>
+        <button id="google-login" class="button google-button" type="button">Continue with Google</button>
         <p class="login-note">Access is enforced by Firebase Security Rules. A direct link is not enough to view report data.</p>
       </div>
     </section>
