@@ -1,0 +1,8 @@
+/* Dark dashboard contrast fixes */
+.stat-card,.user-table-wrap,.user-row{background:#171c21;color:#f4f6f8}
+.stat-card span,.user-row span,.user-row small,.user-table-head p{color:#aebbc6}
+.stat-card b,.user-table-head h2,.user-row b{color:#f4f6f8}
+.user-row{border-color:#303b45}.user-row:hover{background:#202830}
+.stat-card:hover,.stat-card.active{background:#202630;border-color:#8f88ff}
+.admin-brand{color:#f4f6f8}.admin-brand small{color:#aebbc6}
+.google-button{width:100%;margin-top:10px;border:1px solid #303b45;background:#171c21;color:#f4f6f8}
