@@ -8,7 +8,29 @@
   <title>Moderation — Redemption</title>
   <link rel="stylesheet" href="admin.css">
   <link rel="stylesheet" href="admin-dark.css">
-  <style>[hidden]{display:none!important}</style>
+  <style>
+    [hidden]{display:none!important}
+    .user-insights{display:grid;gap:18px}
+    .stats-grid{display:grid;grid-template-columns:repeat(2,minmax(180px,1fr));gap:12px;margin:30px 0 8px}
+    .stat-card{display:grid;gap:9px;padding:18px;border:1px solid var(--line);border-radius:16px;background:#fff;color:var(--ink);box-shadow:0 3px 9px rgba(23,33,44,.025);cursor:pointer;text-align:left}
+    .stat-card:hover,.stat-card.active{border-color:#aaa4ff;box-shadow:0 10px 24px rgba(99,91,255,.1)}
+    .stat-card span{color:var(--muted);font-size:.78rem;font-weight:850;letter-spacing:.1em;text-transform:uppercase}
+    .stat-card b{font:400 2.35rem/1 Georgia,serif;letter-spacing:-.05em}
+    .user-table-wrap{border:1px solid var(--line);border-radius:16px;background:#fff;overflow:hidden}
+    .user-table-head{display:flex;padding:17px 18px;border-bottom:1px solid var(--line);align-items:center;justify-content:space-between;gap:14px}
+    .user-table-head h2{margin:0;font:400 1.6rem Georgia,serif;letter-spacing:-.04em}
+    .user-table-head p{margin:0;color:var(--muted);font-size:.82rem}
+    .user-table{display:grid}
+    .user-row{display:flex;width:100%;padding:14px 18px;border:0;border-bottom:1px solid var(--line);background:#fff;color:var(--ink);align-items:center;justify-content:space-between;gap:18px;font:inherit;cursor:pointer;text-align:left}
+    .user-row:hover{background:#fbfbff}
+    .user-row:last-child{border-bottom:0}
+    .user-row b,.user-row span{display:block;max-width:390px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .user-row b{font-size:.91rem}
+    .user-row span{color:var(--muted);font-size:.8rem}
+    .user-row small{max-width:230px;overflow:hidden;color:var(--muted);font-size:.76rem;text-overflow:ellipsis;white-space:nowrap}
+    @media(max-width:830px){.stats-grid{grid-template-columns:1fr}}
+    @media(max-width:520px){.user-table-head,.user-row{align-items:flex-start;flex-direction:column}.user-row small{max-width:100%}}
+  </style>
 </head>
 <body>
   <main class="admin-shell">
@@ -36,11 +58,21 @@
     <section id="dashboard" hidden>
       <header class="dashboard-header"><div class="dashboard-header-inner"><a class="admin-brand" href="index.html"><span>R</span>Redemption <small>Moderation</small></a><div class="header-actions"><span id="admin-email" class="admin-email"></span><button id="signout" class="text-button">Sign out</button></div></div></header>
       <div class="dashboard-layout">
-        <aside class="sidebar"><div class="sidebar-head"><p class="eyebrow">Queue</p><h2>Reports</h2></div><button id="open-filter" class="queue-button active"><span>Open</span><b id="open-count">0</b></button><button id="all-filter" class="queue-button"><span>All reports</span><b id="all-count">0</b></button><p class="sidebar-help">Every decision is saved to the report’s audit log.</p></aside>
+        <aside class="sidebar"><div class="sidebar-head"><p class="eyebrow">Queue</p><h2>Reports</h2></div><button id="open-filter" class="queue-button active"><span>Open</span><b id="open-count">0</b></button><button id="all-filter" class="queue-button"><span>All reports</span><b id="all-count">0</b></button><button id="users-filter" class="queue-button"><span>Users</span><b id="users-count">0</b></button><p class="sidebar-help">Every decision is saved to the report’s audit log.</p></aside>
         <section class="content-area"><div class="content-top"><div><p class="eyebrow">Trust &amp; safety</p><h1>Review reports</h1></div><button id="refresh" class="icon-button" aria-label="Refresh reports" title="Refresh reports">↻</button></div>
           <div class="filters"><label class="search"><input id="search" type="search" placeholder="Search people, content or email"></label><label>Status<select id="status-filter"><option value="open">Open</option><option value="all">All statuses</option><option value="reviewing">Reviewing</option><option value="actioned">Actioned</option><option value="dismissed">Dismissed</option></select></label><label>Type<select id="type-filter"><option value="all">All types</option><option value="post">Posts</option><option value="comment">Comments</option><option value="user">Users</option></select></label><label>Priority<select id="priority-filter"><option value="all">All priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></label></div>
           <p id="load-message" class="load-message" aria-live="polite">Loading reports…</p>
           <div id="report-list" class="report-list" aria-live="polite"></div>
+          <div id="user-insights" class="user-insights" hidden>
+            <div class="stats-grid">
+              <button id="total-users-card" class="stat-card active" type="button"><span>Total users</span><b id="total-users-count">0</b></button>
+              <button id="deleted-users-card" class="stat-card" type="button"><span>Deleted accounts</span><b id="deleted-users-count">0</b></button>
+            </div>
+            <div class="user-table-wrap">
+              <div class="user-table-head"><h2 id="user-table-title">Total users</h2><p id="user-table-count">0 accounts</p></div>
+              <div id="user-table" class="user-table" aria-live="polite"></div>
+            </div>
+          </div>
         </section>
         <aside id="detail-panel" class="detail-panel"><div class="empty-detail"><span>⌁</span><h2>Select a report</h2><p>Review the submitted context, then record a moderation decision.</p></div></aside>
       </div>

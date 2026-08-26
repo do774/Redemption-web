@@ -24,9 +24,15 @@ const loginButton = $('#login-submit');
 const loginStatus = $('#login-status');
 const filters = { status: 'open', type: 'all', priority: 'all', search: '' };
 let reports = [];
+let users = [];
+let deletedAccounts = [];
 let selectedID = null;
 let unsubscribeReports = null;
+let unsubscribeUsers = null;
+let unsubscribeDeletedAccounts = null;
 let currentAdmin = null;
+let activeView = 'reports';
+let activeUserList = 'users';
 
 $('#login-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -49,16 +55,19 @@ $('#login-form').addEventListener('submit', async event => {
 
 $('#signout').addEventListener('click', () => signOut(auth));
 $('#denied-signout').addEventListener('click', () => signOut(auth));
-$('#refresh').addEventListener('click', () => { if (currentAdmin) subscribeToReports(); });
+$('#refresh').addEventListener('click', () => { if (currentAdmin) subscribeToData(); });
 $('#search').addEventListener('input', event => { filters.search = event.target.value.trim().toLowerCase(); render(); });
 $('#status-filter').addEventListener('change', event => { filters.status = event.target.value; render(); });
 $('#type-filter').addEventListener('change', event => { filters.type = event.target.value; render(); });
 $('#priority-filter').addEventListener('change', event => { filters.priority = event.target.value; render(); });
 $('#open-filter').addEventListener('click', () => setQueue('open'));
 $('#all-filter').addEventListener('click', () => setQueue('all'));
+$('#users-filter').addEventListener('click', () => setView('users'));
+$('#total-users-card').addEventListener('click', () => { activeUserList = 'users'; renderUsers(); });
+$('#deleted-users-card').addEventListener('click', () => { activeUserList = 'deleted'; renderUsers(); });
 
 onAuthStateChanged(auth, async user => {
-  stopReports();
+  stopData();
   currentAdmin = null;
   if (!user) {
     loginStatus.textContent = 'Ready to sign in.';
@@ -70,7 +79,7 @@ onAuthStateChanged(auth, async user => {
     currentAdmin = { uid: user.uid, name: user.displayName || user.email || 'Administrator', email: user.email || '' };
     $('#admin-email').textContent = currentAdmin.email;
     showScreen(dashboard);
-    subscribeToReports();
+    subscribeToData();
   } catch (exception) {
     console.error(exception);
     showScreen(deniedScreen);
@@ -84,8 +93,17 @@ function showScreen(screen) {
   [loginScreen, deniedScreen, dashboard].forEach(element => { element.hidden = element !== screen; });
 }
 
+function subscribeToData() {
+  subscribeToReports();
+  subscribeToUsers();
+  subscribeToDeletedAccounts();
+}
+
 function subscribeToReports() {
-  stopReports();
+  if (unsubscribeReports) {
+    unsubscribeReports();
+    unsubscribeReports = null;
+  }
   $('#load-message').textContent = 'Loading reports…';
   unsubscribeReports = onSnapshot(query(collection(db, 'reports'), orderBy('createdAt', 'desc')), snapshot => {
     reports = snapshot.docs.map(documentSnapshot => ({ id: documentSnapshot.id, ...documentSnapshot.data() }));
@@ -98,13 +116,65 @@ function subscribeToReports() {
   });
 }
 
-function stopReports() { if (unsubscribeReports) { unsubscribeReports(); unsubscribeReports = null; } }
+function subscribeToUsers() {
+  if (unsubscribeUsers) {
+    unsubscribeUsers();
+    unsubscribeUsers = null;
+  }
+  unsubscribeUsers = onSnapshot(collection(db, 'users'), snapshot => {
+    users = snapshot.docs.map(documentSnapshot => ({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+    renderUsers();
+  }, error => {
+    console.error(error);
+    $('#user-table').innerHTML = `<div class="empty-list">Could not load users: ${escapeHTML(error.message)}</div>`;
+  });
+}
+
+function subscribeToDeletedAccounts() {
+  if (unsubscribeDeletedAccounts) {
+    unsubscribeDeletedAccounts();
+    unsubscribeDeletedAccounts = null;
+  }
+  unsubscribeDeletedAccounts = onSnapshot(collection(db, 'deletedAccounts'), snapshot => {
+    deletedAccounts = snapshot.docs.map(documentSnapshot => ({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+    renderUsers();
+  }, error => {
+    console.error(error);
+    $('#user-table').innerHTML = `<div class="empty-list">Could not load deleted accounts: ${escapeHTML(error.message)}</div>`;
+  });
+}
+
+function stopData() {
+  [unsubscribeReports, unsubscribeUsers, unsubscribeDeletedAccounts].forEach(unsubscribe => {
+    if (unsubscribe) unsubscribe();
+  });
+  unsubscribeReports = null;
+  unsubscribeUsers = null;
+  unsubscribeDeletedAccounts = null;
+}
 
 function setQueue(status) {
+  setView('reports');
   filters.status = status;
   $('#status-filter').value = status;
   $('#open-filter').classList.toggle('active', status === 'open');
   $('#all-filter').classList.toggle('active', status === 'all');
+  render();
+}
+
+function setView(view) {
+  activeView = view;
+  $('#users-filter').classList.toggle('active', view === 'users');
+  $('#open-filter').classList.toggle('active', view === 'reports' && filters.status === 'open');
+  $('#all-filter').classList.toggle('active', view === 'reports' && filters.status === 'all');
+  $('.content-top .eyebrow').textContent = view === 'users' ? 'Admin overview' : 'Trust & safety';
+  $('.content-top h1').textContent = view === 'users' ? 'User insights' : 'Review reports';
+  $('.filters').hidden = view === 'users';
+  $('#load-message').hidden = view === 'users';
+  $('#report-list').hidden = view === 'users';
+  $('#user-insights').hidden = view !== 'users';
+  detail.hidden = view === 'users';
+  if (view === 'users') renderUsers();
   render();
 }
 
@@ -119,6 +189,11 @@ function filteredReports() {
 }
 
 function render() {
+  $('#users-count').textContent = users.length;
+  if (activeView === 'users') {
+    renderUsers();
+    return;
+  }
   const visible = filteredReports();
   const openCount = reports.filter(report => report.status === 'open').length;
   $('#open-count').textContent = openCount;
@@ -146,6 +221,39 @@ function render() {
     });
   }
   renderDetail(reports.find(report => report.id === selectedID));
+}
+
+function renderUsers() {
+  $('#users-count').textContent = users.length;
+  $('#total-users-count').textContent = users.length;
+  $('#deleted-users-count').textContent = deletedAccounts.length;
+  $('#total-users-card').classList.toggle('active', activeUserList === 'users');
+  $('#deleted-users-card').classList.toggle('active', activeUserList === 'deleted');
+
+  const isDeleted = activeUserList === 'deleted';
+  const rows = (isDeleted ? deletedAccounts : users)
+    .slice()
+    .sort((a, b) => {
+      if (isDeleted) return dateValue(b.deletedAt) - dateValue(a.deletedAt);
+      return String(a.username || a.displayName || a.email || '').localeCompare(String(b.username || b.displayName || b.email || ''));
+    });
+
+  $('#user-table-title').textContent = isDeleted ? 'Deleted accounts' : 'Total users';
+  $('#user-table-count').textContent = `${rows.length} account${rows.length === 1 ? '' : 's'}`;
+  const table = $('#user-table');
+  table.replaceChildren();
+  if (!rows.length) {
+    table.innerHTML = `<div class="empty-list">No ${isDeleted ? 'deleted accounts' : 'users'} yet.</div>`;
+    return;
+  }
+
+  rows.forEach(account => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'user-row';
+    row.innerHTML = `<div><b>${escapeHTML(account.username ? `@${String(account.username).replace(/^@+/, '')}` : account.displayName || 'No username')}</b><span>${escapeHTML(account.email || 'No email')}</span></div><small>${escapeHTML(isDeleted ? dateText(account.deletedAt) : account.displayName || account.uid || account.id)}</small>`;
+    table.append(row);
+  });
 }
 
 function renderDetail(report) {
