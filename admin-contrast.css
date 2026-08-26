@@ -6,3 +6,4 @@
 .stat-card:hover,.stat-card.active{background:#202630;border-color:#8f88ff}
 .admin-brand{color:#f4f6f8}.admin-brand small{color:#aebbc6}
 .google-button{width:100%;margin-top:10px;border:1px solid #303b45;background:#171c21;color:#f4f6f8}
+.content-area,.detail-panel{color:#f4f6f8}.report-row,.target-card,.moderation-action,.icon-button{background:#171c21!important;color:#f4f6f8}.report-select:hover{background:#202830!important}.report-row h2,.detail-top h2,.target-card b,.detail-section h3,.empty-detail h2{color:#f4f6f8}.report-excerpt,.reason-copy,.target-card p,.empty-detail p,.audit-item p{color:#aebbc6}.detail-panel{background:#11161b!important}.filters input,.filters select,.action-note{background:#11161b!important;color:#f4f6f8!important}.queue-button:hover,.queue-button.active{background:#292750!important;color:#e1dfff!important}.report-meta .reason{background:#292750!important;color:#d6d3ff!important}
