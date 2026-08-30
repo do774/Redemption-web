@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="admin.css">
   <link rel="stylesheet" href="admin-dark.css">
   <link rel="stylesheet" href="admin-contrast.css">
+  <link rel="stylesheet" href="admin-neon.css">
   <style>
     [hidden]{display:none!important}
     .user-insights{display:grid;gap:18px}
@@ -38,7 +39,7 @@
   <main class="admin-shell">
     <section id="login-screen" class="login-screen">
       <div class="login-card">
-        <a class="admin-brand" href="index.html"><span>R</span>Redemption</a>
+        <a class="admin-brand" href="index.html"><span><img src="logoRedemption.png" alt="Redemption"></span></a>
         <p class="eyebrow">Private workspace</p>
         <h1>Moderation desk</h1>
         <p class="intro">Sign in with the Firebase account assigned the Redemption administrator role.</p>
@@ -55,11 +56,11 @@
     </section>
 
     <section id="access-denied" class="access-screen" hidden>
-      <div class="login-card"><a class="admin-brand" href="index.html"><span>R</span>Redemption</a><p class="eyebrow">Access denied</p><h1>This account is not an administrator.</h1><p class="intro">Ask the project owner to assign the Firebase custom claim <code>admin: true</code> to this account, then sign in again.</p><button id="denied-signout" class="button secondary">Sign out</button></div>
+      <div class="login-card"><a class="admin-brand" href="index.html"><span><img src="logoRedemption.png" alt="Redemption"></span></a><p class="eyebrow">Access denied</p><h1>This account is not an administrator.</h1><p class="intro">Ask the project owner to assign the Firebase custom claim <code>admin: true</code> to this account, then sign in again.</p><button id="denied-signout" class="button secondary">Sign out</button></div>
     </section>
 
     <section id="dashboard" hidden>
-      <header class="dashboard-header"><div class="dashboard-header-inner"><a class="admin-brand" href="index.html"><span>R</span>Redemption <small>Moderation</small></a><div class="header-actions"><span id="admin-email" class="admin-email"></span><button id="signout" class="text-button">Sign out</button></div></div></header>
+      <header class="dashboard-header"><div class="dashboard-header-inner"><a class="admin-brand" href="index.html"><span><img src="logoRedemption.png" alt="Redemption"></span> <small>Moderation</small></a><div class="header-actions"><span id="admin-email" class="admin-email"></span><button id="signout" class="text-button">Sign out</button></div></div></header>
       <div class="dashboard-layout">
         <aside class="sidebar"><div class="sidebar-head"><p class="eyebrow">Queue</p><h2>Reports</h2></div><button id="open-filter" class="queue-button active"><span>Open</span><b id="open-count">0</b></button><button id="all-filter" class="queue-button"><span>All reports</span><b id="all-count">0</b></button><button id="users-filter" class="queue-button"><span>Users</span><b id="users-count">0</b></button><p class="sidebar-help">Every decision is saved to the report’s audit log.</p></aside>
         <section class="content-area"><div class="content-top"><div><p class="eyebrow">Trust &amp; safety</p><h1>Review reports</h1></div><button id="refresh" class="icon-button" aria-label="Refresh reports" title="Refresh reports">↻</button></div>
