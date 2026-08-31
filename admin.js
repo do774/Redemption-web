@@ -332,12 +332,13 @@ async function deleteReportedContent(transaction, report) {
   const parts = path.split('/');
   if (parts[0] !== 'posts' || !['2', '4'].includes(String(parts.length))) throw new Error('Unsupported content path.');
   if (parts.length === 2) {
-    const comments = await transaction.get(query(collection(db, `${path}/comments`)));
+    const postRef = doc(db, 'posts', parts[1]);
+    const comments = await transaction.get(query(collection(db, 'posts', parts[1], 'comments')));
     comments.forEach(comment => transaction.delete(comment.ref));
-    transaction.delete(doc(db, path));
+    transaction.delete(postRef);
     return;
   }
-  if (parts[2] === 'comments') transaction.delete(doc(db, path));
+  if (parts[2] === 'comments') transaction.delete(doc(db, 'posts', parts[1], 'comments', parts[3]));
   else throw new Error('Unsupported content path.');
 }
 
