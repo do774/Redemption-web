@@ -308,6 +308,7 @@ async function resolveReport(report, action, wrapper) {
       const snapshot = await transaction.get(ref);
       if (!snapshot.exists()) throw new Error('This report no longer exists.');
       const existingLog = snapshot.data().auditLog || [];
+      if (action === 'removeContent') await deleteReportedContent(transaction, report);
       transaction.update(ref, {
         status: label,
         lastAction: action,
@@ -323,6 +324,21 @@ async function resolveReport(report, action, wrapper) {
     state.textContent = `Could not save: ${exception.message}`;
     wrapper.querySelectorAll('button').forEach(button => { button.disabled = false; });
   }
+}
+
+async function deleteReportedContent(transaction, report) {
+  const path = report.target?.path;
+  if (!path) throw new Error('This report has no content path to remove.');
+  const parts = path.split('/');
+  if (parts[0] !== 'posts' || !['2', '4'].includes(String(parts.length))) throw new Error('Unsupported content path.');
+  if (parts.length === 2) {
+    const comments = await transaction.get(query(collection(db, `${path}/comments`)));
+    comments.forEach(comment => transaction.delete(comment.ref));
+    transaction.delete(doc(db, path));
+    return;
+  }
+  if (parts[2] === 'comments') transaction.delete(doc(db, path));
+  else throw new Error('Unsupported content path.');
 }
 
 function dateValue(value) { if (!value) return 0; return typeof value.toDate === 'function' ? value.toDate().getTime() : new Date(value).getTime() || 0; }
