@@ -1,6 +1,6 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, signOut } from 'https://www.gstatic.com/firebasejs/12.17.1/firebase-auth.js';
-import { getFirestore, collection, onSnapshot, orderBy, query, doc, runTransaction, serverTimestamp, Timestamp } from 'https://www.gstatic.com/firebasejs/12.17.1/firebase-firestore.js';
+import { getFirestore, collection, onSnapshot, orderBy, query, doc, runTransaction, serverTimestamp, Timestamp, where, getDocs, writeBatch } from 'https://www.gstatic.com/firebasejs/12.17.1/firebase-firestore.js';
 
 // Firebase web configuration is public by design. Database access is protected by Auth + Firestore Security Rules.
 const firebaseConfig = {
@@ -296,19 +296,21 @@ async function resolveReport(report, action, wrapper) {
   const note = wrapper.querySelector('.action-note').value.trim();
   const state = wrapper.querySelector('.save-state');
   const label = { dismiss: 'dismissed', removeContent: 'actioned', warnUser: 'actioned', suspend: 'actioned', ban: 'actioned' }[action] || 'actioned';
-  const reportedUID = report.reportedUser?.uid;
+  const reportedUID = reportedUserID(report);
   if (['ban', 'suspend'].includes(action) && !reportedUID) { state.textContent = 'Could not update account: this report has no reported user UID.'; return; }
   const durationDays = Number(wrapper.querySelector('.suspend-duration select')?.value || 0);
   const moderationUntil = durationDays ? Timestamp.fromDate(new Date(Date.now() + durationDays * 86400000)) : null;
   state.textContent = 'Saving decision…';
   wrapper.querySelectorAll('button').forEach(button => { button.disabled = true; });
   try {
+    const contentRefsToDelete = action === 'removeContent' ? await reportedContentRefs(report) : [];
     await runTransaction(db, async transaction => {
       const ref = doc(db, 'reports', report.id);
       const snapshot = await transaction.get(ref);
       if (!snapshot.exists()) throw new Error('This report no longer exists.');
       const existingLog = snapshot.data().auditLog || [];
-      if (action === 'removeContent') await deleteReportedContent(transaction, report);
+      if (action === 'removeContent') deleteReportedContent(transaction, contentRefsToDelete);
+      if (action === 'warnUser') createWarningNotice(transaction, report, note);
       transaction.update(ref, {
         status: label,
         lastAction: action,
@@ -318,6 +320,7 @@ async function resolveReport(report, action, wrapper) {
       });
       if (action === 'ban' || action === 'suspend') transaction.set(doc(db, 'users', reportedUID), { moderationStatus: action === 'ban' ? 'banned' : 'suspended', moderationReason: note || report.reason || 'Moderation decision', moderationUntil: action === 'ban' ? null : moderationUntil, moderatedAt: serverTimestamp(), moderatedBy: currentAdmin.uid }, { merge: true });
     });
+    if (action === 'ban' || action === 'suspend') await markUnreadWarningsRead(reportedUID);
     state.textContent = 'Decision saved to the audit log.';
   } catch (exception) {
     console.error(exception);
@@ -326,20 +329,71 @@ async function resolveReport(report, action, wrapper) {
   }
 }
 
-async function deleteReportedContent(transaction, report) {
+function createWarningNotice(transaction, report, note) {
+  const reportedUID = reportedUserID(report);
+  if (!reportedUID) throw new Error('Could not warn account: this report has no reported user UID.');
+
+  const warningRef = doc(collection(db, 'moderationWarnings'));
+  const message = note || `Your account received a warning for: ${report.reason || 'a moderation issue'}. Please review the community guidelines before posting again.`;
+
+  transaction.set(warningRef, {
+    id: warningRef.id,
+    recipientUID: reportedUID,
+    recipient: report.reportedUser || null,
+    reportID: report.id,
+    reason: report.reason || 'Moderation warning',
+    message,
+    status: 'unread',
+    createdAt: serverTimestamp(),
+    createdBy: currentAdmin.uid,
+    createdByName: currentAdmin.name
+  });
+}
+
+async function markUnreadWarningsRead(uid) {
+  if (!uid) return;
+
+  const snapshot = await getDocs(query(
+    collection(db, 'moderationWarnings'),
+    where('recipientUID', '==', uid),
+    where('status', '==', 'unread')
+  ));
+
+  if (snapshot.empty) return;
+
+  const batch = writeBatch(db);
+  snapshot.forEach(documentSnapshot => {
+    batch.update(documentSnapshot.ref, {
+      status: 'read',
+      readAt: serverTimestamp()
+    });
+  });
+  await batch.commit();
+}
+
+function reportedUserID(report) {
+  return report.reportedUser?.uid || report.target?.ownerUID || report.target?.userID || null;
+}
+
+async function reportedContentRefs(report) {
   const path = report.target?.path;
   if (!path) throw new Error('This report has no content path to remove.');
+
   const parts = path.split('/');
   if (parts[0] !== 'posts' || !['2', '4'].includes(String(parts.length))) throw new Error('Unsupported content path.');
+
   if (parts.length === 2) {
     const postRef = doc(db, 'posts', parts[1]);
-    const comments = await transaction.get(query(collection(db, 'posts', parts[1], 'comments')));
-    comments.forEach(comment => transaction.delete(comment.ref));
-    transaction.delete(postRef);
-    return;
+    const comments = await getDocs(query(collection(db, 'posts', parts[1], 'comments')));
+    return [...comments.docs.map(comment => comment.ref), postRef];
   }
-  if (parts[2] === 'comments') transaction.delete(doc(db, 'posts', parts[1], 'comments', parts[3]));
-  else throw new Error('Unsupported content path.');
+
+  if (parts[2] !== 'comments') throw new Error('Unsupported content path.');
+  return [doc(db, 'posts', parts[1], 'comments', parts[3])];
+}
+
+function deleteReportedContent(transaction, refs) {
+  refs.forEach(ref => transaction.delete(ref));
 }
 
 function dateValue(value) { if (!value) return 0; return typeof value.toDate === 'function' ? value.toDate().getTime() : new Date(value).getTime() || 0; }
