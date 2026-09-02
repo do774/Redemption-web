@@ -459,6 +459,8 @@ function openMessageComposer(account) {
   $('#admin-message-text').value = '';
   $('#admin-message-type').value = 'warning';
   $('#admin-message-state').textContent = '';
+  $('#send-admin-message').disabled = false;
+  $('#send-admin-message').textContent = 'Send to app';
   $('#admin-message-modal').hidden = false;
   $('#admin-message-text').focus();
 }
@@ -531,7 +533,10 @@ async function deleteAccountFromAdmin(account, button) {
     console.error(exception);
     button.disabled = false;
     button.textContent = 'Delete account';
-    window.alert(`Could not delete account: ${exception.message}`);
+    const message = exception instanceof TypeError && /load failed/i.test(exception.message)
+      ? 'Account deletion is not deployed yet. The admin function must be deployed once before this action can work.'
+      : `Could not delete account: ${exception.message}`;
+    window.alert(message);
   }
 }
 
