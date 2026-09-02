@@ -14,7 +14,7 @@
   <style>
     [hidden]{display:none!important}
     .user-insights{display:grid;gap:18px}
-    .stats-grid{display:grid;grid-template-columns:repeat(2,minmax(180px,1fr));gap:12px;margin:30px 0 8px}
+    .stats-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:12px;margin:30px 0 8px}
     .stat-card{display:grid;gap:9px;padding:18px;border:1px solid var(--line);border-radius:16px;background:#fff;color:var(--ink);box-shadow:0 3px 9px rgba(23,33,44,.025);cursor:pointer;text-align:left}
     .stat-card:hover,.stat-card.active{border-color:#aaa4ff;box-shadow:0 10px 24px rgba(99,91,255,.1)}
     .stat-card span{color:var(--muted);font-size:.78rem;font-weight:850;letter-spacing:.1em;text-transform:uppercase}
@@ -31,7 +31,11 @@
     .user-row b{font-size:.91rem}
     .user-row span{color:var(--muted);font-size:.8rem}
     .user-row small{max-width:230px;overflow:hidden;color:var(--muted);font-size:.76rem;text-overflow:ellipsis;white-space:nowrap}
-    @media(max-width:830px){.stats-grid{grid-template-columns:1fr}}
+    .user-status{display:inline-flex;width:max-content;margin-top:5px;padding:3px 7px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:.68rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase}
+    .user-status.banned{border-color:#b85b6b;color:#ff98a7}.user-status.suspended{border-color:#b98e4e;color:#ffc671}.user-status.warned{border-color:#6c83d5;color:#b9c8ff}.user-status.active{border-color:#4b9f8c;color:#7de3c9}
+    .user-row-actions{display:flex;align-items:center;gap:8px}.restore-user{padding:8px 10px;border:1px solid #3d8c7c;border-radius:9px;background:#153c38;color:#90f0d7;font:inherit;font-size:.76rem;font-weight:800}.restore-user:hover{background:#1b5049}.restore-user.warning{border-color:#6075c7;background:#222b55;color:#c3d0ff}
+    @media(max-width:1050px){.stats-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}}
+    @media(max-width:830px){.stats-grid{grid-template-columns:repeat(2,minmax(150px,1fr))}}
     @media(max-width:520px){.user-table-head,.user-row{align-items:flex-start;flex-direction:column}.user-row small{max-width:100%}}
     .google-button{width:100%;margin-top:10px;border:1px solid var(--line);background:var(--paper);color:var(--ink)}
   </style>
@@ -71,6 +75,9 @@
           <div id="user-insights" class="user-insights" hidden>
             <div class="stats-grid">
               <button id="total-users-card" class="stat-card active" type="button"><span>Total users</span><b id="total-users-count">0</b></button>
+              <button id="banned-users-card" class="stat-card" type="button"><span>Banned users</span><b id="banned-users-count">0</b></button>
+              <button id="suspended-users-card" class="stat-card" type="button"><span>Suspended users</span><b id="suspended-users-count">0</b></button>
+              <button id="warned-users-card" class="stat-card" type="button"><span>Warned users</span><b id="warned-users-count">0</b></button>
               <button id="deleted-users-card" class="stat-card" type="button"><span>Deleted accounts</span><b id="deleted-users-count">0</b></button>
             </div>
             <div class="user-table-wrap">

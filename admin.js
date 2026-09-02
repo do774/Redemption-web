@@ -26,10 +26,12 @@ const filters = { status: 'open', type: 'all', priority: 'all', search: '' };
 let reports = [];
 let users = [];
 let deletedAccounts = [];
+let moderationWarnings = [];
 let selectedID = null;
 let unsubscribeReports = null;
 let unsubscribeUsers = null;
 let unsubscribeDeletedAccounts = null;
+let unsubscribeWarnings = null;
 let currentAdmin = null;
 let activeView = 'reports';
 let activeUserList = 'users';
@@ -73,6 +75,9 @@ $('#open-filter').addEventListener('click', () => setQueue('open'));
 $('#all-filter').addEventListener('click', () => setQueue('all'));
 $('#users-filter').addEventListener('click', () => setView('users'));
 $('#total-users-card').addEventListener('click', () => { activeUserList = 'users'; renderUsers(); });
+$('#banned-users-card').addEventListener('click', () => { activeUserList = 'banned'; renderUsers(); });
+$('#suspended-users-card').addEventListener('click', () => { activeUserList = 'suspended'; renderUsers(); });
+$('#warned-users-card').addEventListener('click', () => { activeUserList = 'warned'; renderUsers(); });
 $('#deleted-users-card').addEventListener('click', () => { activeUserList = 'deleted'; renderUsers(); });
 
 onAuthStateChanged(auth, async user => {
@@ -106,6 +111,7 @@ function subscribeToData() {
   subscribeToReports();
   subscribeToUsers();
   subscribeToDeletedAccounts();
+  subscribeToWarnings();
 }
 
 function subscribeToReports() {
@@ -153,13 +159,28 @@ function subscribeToDeletedAccounts() {
   });
 }
 
+function subscribeToWarnings() {
+  if (unsubscribeWarnings) {
+    unsubscribeWarnings();
+    unsubscribeWarnings = null;
+  }
+  unsubscribeWarnings = onSnapshot(collection(db, 'moderationWarnings'), snapshot => {
+    moderationWarnings = snapshot.docs.map(documentSnapshot => ({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+    renderUsers();
+  }, error => {
+    console.error(error);
+    // User data still works if a legacy project has not yet granted the warning collection permission.
+  });
+}
+
 function stopData() {
-  [unsubscribeReports, unsubscribeUsers, unsubscribeDeletedAccounts].forEach(unsubscribe => {
+  [unsubscribeReports, unsubscribeUsers, unsubscribeDeletedAccounts, unsubscribeWarnings].forEach(unsubscribe => {
     if (unsubscribe) unsubscribe();
   });
   unsubscribeReports = null;
   unsubscribeUsers = null;
   unsubscribeDeletedAccounts = null;
+  unsubscribeWarnings = null;
 }
 
 function setQueue(status) {
@@ -235,24 +256,36 @@ function render() {
 function renderUsers() {
   $('#users-count').textContent = users.length;
   $('#total-users-count').textContent = users.length;
+  const bannedUsers = users.filter(user => user.moderationStatus === 'banned');
+  const suspendedUsers = users.filter(user => user.moderationStatus === 'suspended' && !suspensionExpired(user));
+  const warnedUserIDs = new Set(moderationWarnings.filter(warning => warning.status !== 'rescinded').map(warning => warning.recipientUID).filter(Boolean));
+  const warnedUsers = users.filter(user => warnedUserIDs.has(user.uid || user.id));
+  $('#banned-users-count').textContent = bannedUsers.length;
+  $('#suspended-users-count').textContent = suspendedUsers.length;
+  $('#warned-users-count').textContent = warnedUsers.length;
   $('#deleted-users-count').textContent = deletedAccounts.length;
   $('#total-users-card').classList.toggle('active', activeUserList === 'users');
+  $('#banned-users-card').classList.toggle('active', activeUserList === 'banned');
+  $('#suspended-users-card').classList.toggle('active', activeUserList === 'suspended');
+  $('#warned-users-card').classList.toggle('active', activeUserList === 'warned');
   $('#deleted-users-card').classList.toggle('active', activeUserList === 'deleted');
 
   const isDeleted = activeUserList === 'deleted';
-  const rows = (isDeleted ? deletedAccounts : users)
+  const listByState = activeUserList === 'banned' ? bannedUsers : activeUserList === 'suspended' ? suspendedUsers : activeUserList === 'warned' ? warnedUsers : users;
+  const rows = (isDeleted ? deletedAccounts : listByState)
     .slice()
     .sort((a, b) => {
       if (isDeleted) return dateValue(b.deletedAt) - dateValue(a.deletedAt);
       return String(a.username || a.displayName || a.email || '').localeCompare(String(b.username || b.displayName || b.email || ''));
     });
 
-  $('#user-table-title').textContent = isDeleted ? 'Deleted accounts' : 'Total users';
+  const titles = { users: 'Total users', banned: 'Banned users', suspended: 'Suspended users', warned: 'Warned users', deleted: 'Deleted accounts' };
+  $('#user-table-title').textContent = titles[activeUserList] || 'Users';
   $('#user-table-count').textContent = `${rows.length} account${rows.length === 1 ? '' : 's'}`;
   const table = $('#user-table');
   table.replaceChildren();
   if (!rows.length) {
-    table.innerHTML = `<div class="empty-list">No ${isDeleted ? 'deleted accounts' : 'users'} yet.</div>`;
+    table.innerHTML = `<div class="empty-list">No ${titles[activeUserList].toLowerCase()} yet.</div>`;
     return;
   }
 
@@ -260,9 +293,93 @@ function renderUsers() {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'user-row';
-    row.innerHTML = `<div><b>${escapeHTML(account.username ? `@${String(account.username).replace(/^@+/, '')}` : account.displayName || 'No username')}</b><span>${escapeHTML(account.email || 'No email')}</span></div><small>${escapeHTML(isDeleted ? dateText(account.deletedAt) : account.displayName || account.uid || account.id)}</small>`;
+    const status = userStatus(account, warnedUserIDs, isDeleted);
+    const statusInfo = isDeleted ? dateText(account.deletedAt) : moderationSummary(account, status);
+    row.innerHTML = `<div><b>${escapeHTML(account.username ? `@${String(account.username).replace(/^@+/, '')}` : account.displayName || 'No username')}</b><span>${escapeHTML(account.email || 'No email')}</span>${!isDeleted ? `<em class="user-status ${status}">${escapeHTML(status)}</em>` : ''}</div><div class="user-row-actions"><small>${escapeHTML(statusInfo)}</small></div>`;
+    if (!isDeleted && (status === 'banned' || status === 'suspended')) {
+      const restore = document.createElement('button');
+      restore.type = 'button'; restore.className = 'restore-user'; restore.textContent = status === 'banned' ? 'Unban' : 'Unsuspend';
+      restore.addEventListener('click', event => { event.stopPropagation(); restoreModeration(account, status, restore); });
+      row.querySelector('.user-row-actions').append(restore);
+    }
+    if (!isDeleted && status === 'warned') {
+      const clear = document.createElement('button');
+      clear.type = 'button'; clear.className = 'restore-user warning'; clear.textContent = 'Clear warning';
+      clear.addEventListener('click', event => { event.stopPropagation(); clearWarning(account, clear); });
+      row.querySelector('.user-row-actions').append(clear);
+    }
     table.append(row);
   });
+}
+
+function suspensionExpired(user) {
+  return user.moderationStatus === 'suspended' && user.moderationUntil && dateValue(user.moderationUntil) <= Date.now();
+}
+
+function userStatus(user, warnedUserIDs, isDeleted) {
+  if (isDeleted) return 'deleted';
+  if (user.moderationStatus === 'banned') return 'banned';
+  if (user.moderationStatus === 'suspended' && !suspensionExpired(user)) return 'suspended';
+  if (warnedUserIDs.has(user.uid || user.id)) return 'warned';
+  return 'active';
+}
+
+function moderationSummary(user, status) {
+  if (status === 'suspended') return user.moderationUntil ? `Until ${dateText(user.moderationUntil)}` : 'Indefinite suspension';
+  if (status === 'banned') return user.moderationReason || 'Banned by moderation';
+  if (status === 'warned') return 'Warning on record';
+  if (user.moderationStatus === 'suspended' && suspensionExpired(user)) return 'Suspension expired';
+  return user.moderationReason || 'No moderation action';
+}
+
+async function restoreModeration(account, status, button) {
+  if (!currentAdmin) return;
+  const label = status === 'banned' ? 'unban this account' : 'unsuspend this account';
+  if (!window.confirm(`Are you sure you want to ${label}? The user will immediately regain access to Redemption.`)) return;
+  button.disabled = true;
+  button.textContent = 'Saving…';
+  try {
+    await runTransaction(db, async transaction => {
+      transaction.set(doc(db, 'users', account.id || account.uid), {
+        moderationStatus: 'active',
+        moderationReason: null,
+        moderationUntil: null,
+        moderatedAt: serverTimestamp(),
+        moderatedBy: currentAdmin.uid,
+        lastModerationAction: status === 'banned' ? 'unban' : 'unsuspend',
+        lastModerationNote: `Account restored by ${currentAdmin.name}.`
+      }, { merge: true });
+    });
+  } catch (exception) {
+    console.error(exception);
+    button.disabled = false;
+    button.textContent = status === 'banned' ? 'Unban' : 'Unsuspend';
+    window.alert(`Could not restore account: ${exception.message}`);
+  }
+}
+
+async function clearWarning(account, button) {
+  if (!currentAdmin) return;
+  if (!window.confirm('Clear all active warning records for this account? The account will remain active.')) return;
+  button.disabled = true;
+  button.textContent = 'Saving…';
+  try {
+    const userID = account.uid || account.id;
+    const activeWarnings = moderationWarnings.filter(warning => warning.recipientUID === userID && warning.status !== 'rescinded');
+    const batch = writeBatch(db);
+    activeWarnings.forEach(warning => batch.update(doc(db, 'moderationWarnings', warning.id), {
+      status: 'rescinded',
+      rescindedAt: serverTimestamp(),
+      rescindedBy: currentAdmin.uid,
+      rescindedByName: currentAdmin.name
+    }));
+    await batch.commit();
+  } catch (exception) {
+    console.error(exception);
+    button.disabled = false;
+    button.textContent = 'Clear warning';
+    window.alert(`Could not clear warning: ${exception.message}`);
+  }
 }
 
 function renderDetail(report) {
