@@ -376,6 +376,8 @@ async function restoreModeration(account, status, button) {
         lastModerationNote: `Account restored by ${currentAdmin.name}.`
       }, { merge: true });
     });
+    button.disabled = false;
+    button.textContent = 'Restored';
   } catch (exception) {
     console.error(exception);
     button.disabled = false;
@@ -420,7 +422,11 @@ async function directModeration(account, action, button) {
         lastModerationNote: reason.trim()
       }, { merge: true });
     });
-    await markUnreadWarningsRead(uid);
+    // Existing warning records are not part of the access decision. A legacy
+    // warning rule must never make an already-saved ban/suspension look failed.
+    try { await markUnreadWarningsRead(uid); } catch (warningError) { console.warn('Could not mark old warnings read:', warningError); }
+    button.disabled = false;
+    button.textContent = action === 'ban' ? 'Banned' : 'Suspended';
   } catch (exception) {
     console.error(exception);
     button.disabled = false;
@@ -445,6 +451,8 @@ async function clearWarning(account, button) {
       rescindedByName: currentAdmin.name
     }));
     await batch.commit();
+    button.disabled = false;
+    button.textContent = 'Warnings cleared';
   } catch (exception) {
     console.error(exception);
     button.disabled = false;
