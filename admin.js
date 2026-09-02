@@ -285,7 +285,7 @@ function renderUsers() {
 
   const titles = { users: 'Total users', banned: 'Banned users', suspended: 'Suspended users', warned: 'Warned users', deleted: 'Deleted accounts' };
   $('#user-table-title').textContent = titles[activeUserList] || 'Users';
-  $('#user-table-count').textContent = `${rows.length} account${rows.length === 1 ? '' : 's'}`;
+  $('#user-table-count').textContent = `${rows.length} account${rows.length === 1 ? '' : 's'} · use Actions to manage an account`;
   const table = $('#user-table');
   table.replaceChildren();
   if (!rows.length) {
@@ -294,48 +294,48 @@ function renderUsers() {
   }
 
   rows.forEach(account => {
-    const row = document.createElement('button');
-    row.type = 'button';
+    const row = document.createElement('div');
     row.className = 'user-row';
     const status = userStatus(account, warnedUserIDs, isDeleted);
     const statusInfo = isDeleted ? dateText(account.deletedAt) : moderationSummary(account, status);
     row.innerHTML = `<div><b>${escapeHTML(account.username ? `@${String(account.username).replace(/^@+/, '')}` : account.displayName || 'No username')}</b><span>${escapeHTML(account.email || 'No email')}</span>${!isDeleted ? `<em class="user-status ${status}">${escapeHTML(status)}</em>` : ''}</div><div class="user-row-actions"><small>${escapeHTML(statusInfo)}</small></div>`;
+    const actions = row.querySelector('.user-row-actions');
+    const menu = !isDeleted ? createUserActionMenu(account) : null;
+    if (menu) actions.append(menu);
     if (!isDeleted && (status === 'banned' || status === 'suspended')) {
-      const restore = document.createElement('button');
-      restore.type = 'button'; restore.className = 'restore-user'; restore.textContent = status === 'banned' ? 'Unban' : 'Unsuspend';
-      restore.addEventListener('click', event => { event.stopPropagation(); restoreModeration(account, status, restore); });
-      row.querySelector('.user-row-actions').append(restore);
+      addMenuAction(menu, status === 'banned' ? 'Unban account' : 'Unsuspend account', 'restore-user', button => restoreModeration(account, status, button));
     }
     if (!isDeleted && (status === 'active' || status === 'warned')) {
-      const suspend = document.createElement('button');
-      suspend.type = 'button'; suspend.className = 'restore-user suspend-user'; suspend.textContent = 'Suspend';
-      suspend.addEventListener('click', event => { event.stopPropagation(); directModeration(account, 'suspend', suspend); });
-      row.querySelector('.user-row-actions').append(suspend);
-
-      const ban = document.createElement('button');
-      ban.type = 'button'; ban.className = 'restore-user ban-user'; ban.textContent = 'Ban';
-      ban.addEventListener('click', event => { event.stopPropagation(); directModeration(account, 'ban', ban); });
-      row.querySelector('.user-row-actions').append(ban);
+      addMenuAction(menu, 'Suspend account', 'suspend-user', button => directModeration(account, 'suspend', button));
+      addMenuAction(menu, 'Ban account', 'ban-user', button => directModeration(account, 'ban', button));
     }
     if (!isDeleted && status === 'warned') {
-      const clear = document.createElement('button');
-      clear.type = 'button'; clear.className = 'restore-user warning'; clear.textContent = 'Clear warning';
-      clear.addEventListener('click', event => { event.stopPropagation(); clearWarning(account, clear); });
-      row.querySelector('.user-row-actions').append(clear);
+      addMenuAction(menu, 'Clear warnings', 'restore-user warning', button => clearWarning(account, button));
     }
     if (!isDeleted) {
-      const message = document.createElement('button');
-      message.type = 'button'; message.className = 'restore-user message-user'; message.textContent = 'Message';
-      message.addEventListener('click', event => { event.stopPropagation(); openMessageComposer(account); });
-      row.querySelector('.user-row-actions').append(message);
-
-      const remove = document.createElement('button');
-      remove.type = 'button'; remove.className = 'restore-user delete-user'; remove.textContent = 'Delete account';
-      remove.addEventListener('click', event => { event.stopPropagation(); deleteAccountFromAdmin(account, remove); });
-      row.querySelector('.user-row-actions').append(remove);
+      addMenuAction(menu, 'Send message', 'message-user', () => openMessageComposer(account));
+      addMenuAction(menu, 'Delete account', 'delete-user', button => deleteAccountFromAdmin(account, button));
     }
     table.append(row);
   });
+}
+
+function createUserActionMenu(account) {
+  const menu = document.createElement('details');
+  menu.className = 'user-action-menu';
+  menu.innerHTML = `<summary aria-label="Actions for ${escapeHTML(account.displayName || account.email || 'user')}" title="Actions">•••</summary><div class="user-action-popover"></div>`;
+  return menu;
+}
+
+function addMenuAction(menu, label, className, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = className; button.textContent = label;
+  button.addEventListener('click', async event => {
+    event.preventDefault();
+    await onClick(button);
+    if (!button.disabled) menu.open = false;
+  });
+  menu.querySelector('.user-action-popover').append(button);
 }
 
 function suspensionExpired(user) {
