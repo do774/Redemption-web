@@ -306,6 +306,17 @@ function renderUsers() {
       restore.addEventListener('click', event => { event.stopPropagation(); restoreModeration(account, status, restore); });
       row.querySelector('.user-row-actions').append(restore);
     }
+    if (!isDeleted && (status === 'active' || status === 'warned')) {
+      const suspend = document.createElement('button');
+      suspend.type = 'button'; suspend.className = 'restore-user suspend-user'; suspend.textContent = 'Suspend';
+      suspend.addEventListener('click', event => { event.stopPropagation(); directModeration(account, 'suspend', suspend); });
+      row.querySelector('.user-row-actions').append(suspend);
+
+      const ban = document.createElement('button');
+      ban.type = 'button'; ban.className = 'restore-user ban-user'; ban.textContent = 'Ban';
+      ban.addEventListener('click', event => { event.stopPropagation(); directModeration(account, 'ban', ban); });
+      row.querySelector('.user-row-actions').append(ban);
+    }
     if (!isDeleted && status === 'warned') {
       const clear = document.createElement('button');
       clear.type = 'button'; clear.className = 'restore-user warning'; clear.textContent = 'Clear warning';
@@ -370,6 +381,51 @@ async function restoreModeration(account, status, button) {
     button.disabled = false;
     button.textContent = status === 'banned' ? 'Unban' : 'Unsuspend';
     window.alert(`Could not restore account: ${exception.message}`);
+  }
+}
+
+async function directModeration(account, action, button) {
+  if (!currentAdmin) return;
+  const name = account.displayName || account.username || account.email || account.id;
+  const reason = window.prompt(`Reason for ${action === 'ban' ? 'banning' : 'suspending'} ${name}:`, 'Moderation decision');
+  if (reason === null) return;
+  if (!reason.trim()) { window.alert('A moderation reason is required.'); return; }
+
+  let moderationUntil = null;
+  if (action === 'suspend') {
+    const rawDays = window.prompt('Suspend for how many days? Use 1, 7, 30, or 0 for indefinitely.', '7');
+    if (rawDays === null) return;
+    const days = Number(rawDays);
+    if (!Number.isFinite(days) || days < 0) { window.alert('Enter a positive number of days, or 0 for indefinitely.'); return; }
+    moderationUntil = days ? Timestamp.fromDate(new Date(Date.now() + days * 86400000)) : null;
+  }
+
+  const confirmation = action === 'ban'
+    ? `Ban ${name}? They will immediately lose access to Redemption.`
+    : `Suspend ${name}${moderationUntil ? ` until ${dateText(moderationUntil)}` : ' indefinitely'}?`;
+  if (!window.confirm(confirmation)) return;
+
+  button.disabled = true;
+  button.textContent = 'Saving…';
+  try {
+    const uid = account.id || account.uid;
+    await runTransaction(db, async transaction => {
+      transaction.set(doc(db, 'users', uid), {
+        moderationStatus: action === 'ban' ? 'banned' : 'suspended',
+        moderationReason: reason.trim(),
+        moderationUntil: action === 'ban' ? null : moderationUntil,
+        moderatedAt: serverTimestamp(),
+        moderatedBy: currentAdmin.uid,
+        lastModerationAction: action,
+        lastModerationNote: reason.trim()
+      }, { merge: true });
+    });
+    await markUnreadWarningsRead(uid);
+  } catch (exception) {
+    console.error(exception);
+    button.disabled = false;
+    button.textContent = action === 'ban' ? 'Ban' : 'Suspend';
+    window.alert(`Could not ${action} account: ${exception.message}`);
   }
 }
 
