@@ -35,6 +35,7 @@ let unsubscribeWarnings = null;
 let currentAdmin = null;
 let activeView = 'reports';
 let activeUserList = 'users';
+let messageRecipient = null;
 
 $('#login-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -79,6 +80,9 @@ $('#banned-users-card').addEventListener('click', () => { activeUserList = 'bann
 $('#suspended-users-card').addEventListener('click', () => { activeUserList = 'suspended'; renderUsers(); });
 $('#warned-users-card').addEventListener('click', () => { activeUserList = 'warned'; renderUsers(); });
 $('#deleted-users-card').addEventListener('click', () => { activeUserList = 'deleted'; renderUsers(); });
+$('#close-admin-message').addEventListener('click', closeMessageComposer);
+$('#admin-message-modal').addEventListener('click', event => { if (event.target === $('#admin-message-modal')) closeMessageComposer(); });
+$('#admin-message-form').addEventListener('submit', sendAdminMessage);
 
 onAuthStateChanged(auth, async user => {
   stopData();
@@ -308,6 +312,17 @@ function renderUsers() {
       clear.addEventListener('click', event => { event.stopPropagation(); clearWarning(account, clear); });
       row.querySelector('.user-row-actions').append(clear);
     }
+    if (!isDeleted) {
+      const message = document.createElement('button');
+      message.type = 'button'; message.className = 'restore-user message-user'; message.textContent = 'Message';
+      message.addEventListener('click', event => { event.stopPropagation(); openMessageComposer(account); });
+      row.querySelector('.user-row-actions').append(message);
+
+      const remove = document.createElement('button');
+      remove.type = 'button'; remove.className = 'restore-user delete-user'; remove.textContent = 'Delete account';
+      remove.addEventListener('click', event => { event.stopPropagation(); deleteAccountFromAdmin(account, remove); });
+      row.querySelector('.user-row-actions').append(remove);
+    }
     table.append(row);
   });
 }
@@ -379,6 +394,88 @@ async function clearWarning(account, button) {
     button.disabled = false;
     button.textContent = 'Clear warning';
     window.alert(`Could not clear warning: ${exception.message}`);
+  }
+}
+
+function openMessageComposer(account) {
+  messageRecipient = account;
+  $('#admin-message-recipient').textContent = `To ${account.displayName || account.username || account.email || account.id}`;
+  $('#admin-message-text').value = '';
+  $('#admin-message-type').value = 'warning';
+  $('#admin-message-state').textContent = '';
+  $('#admin-message-modal').hidden = false;
+  $('#admin-message-text').focus();
+}
+
+function closeMessageComposer() {
+  messageRecipient = null;
+  $('#admin-message-modal').hidden = true;
+}
+
+async function sendAdminMessage(event) {
+  event.preventDefault();
+  if (!currentAdmin || !messageRecipient) return;
+  const message = $('#admin-message-text').value.trim();
+  const noticeType = $('#admin-message-type').value;
+  const state = $('#admin-message-state');
+  if (!message) return;
+  const button = $('#send-admin-message');
+  button.disabled = true;
+  state.textContent = 'Sending to the app…';
+  try {
+    await runTransaction(db, async transaction => {
+      const warningRef = doc(collection(db, 'moderationWarnings'));
+      transaction.set(warningRef, {
+        id: warningRef.id,
+        recipientUID: messageRecipient.uid || messageRecipient.id,
+        recipient: {
+          uid: messageRecipient.uid || messageRecipient.id,
+          displayName: messageRecipient.displayName || '',
+          username: messageRecipient.username || '',
+          email: messageRecipient.email || '',
+          profileImageURL: messageRecipient.profileImageURL || ''
+        },
+        reportID: null,
+        reason: noticeType,
+        message,
+        noticeType,
+        status: 'unread',
+        createdAt: serverTimestamp(),
+        createdBy: currentAdmin.uid,
+        createdByName: currentAdmin.name
+      });
+    });
+    state.textContent = 'Sent. It will appear as an in-app popup immediately.';
+    window.setTimeout(closeMessageComposer, 700);
+  } catch (exception) {
+    console.error(exception);
+    state.textContent = `Could not send: ${exception.message}`;
+    button.disabled = false;
+  }
+}
+
+async function deleteAccountFromAdmin(account, button) {
+  if (!currentAdmin) return;
+  const name = account.displayName || account.username || account.email || account.id;
+  if (!window.confirm(`Delete ${name}'s account permanently? This removes their Firebase Authentication account, profile and authored content. This cannot be undone.`)) return;
+  button.disabled = true;
+  button.textContent = 'Deleting…';
+  try {
+    const response = await fetch('https://us-central1-redemption-7c875.cloudfunctions.net/adminDeleteAccount', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${await auth.currentUser.getIdToken()}`
+      },
+      body: JSON.stringify({ data: { uid: account.id || account.uid } })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error?.message || 'The secure account deletion service is not available.');
+  } catch (exception) {
+    console.error(exception);
+    button.disabled = false;
+    button.textContent = 'Delete account';
+    window.alert(`Could not delete account: ${exception.message}`);
   }
 }
 

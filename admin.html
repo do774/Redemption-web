@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="admin-contrast.css">
   <link rel="stylesheet" href="admin-neon.css">
   <link rel="stylesheet" href="admin-moderation.css">
+  <link rel="stylesheet" href="admin-account-actions.css">
   <style>
     [hidden]{display:none!important}
     .user-insights{display:grid;gap:18px}
@@ -90,6 +91,18 @@
       </div>
     </section>
   </main>
+  <div id="admin-message-modal" class="admin-modal" hidden>
+    <form id="admin-message-form" class="admin-modal-card">
+      <button id="close-admin-message" class="modal-close" type="button" aria-label="Close">×</button>
+      <p class="eyebrow">Direct account notice</p>
+      <h2>Send a message</h2>
+      <p id="admin-message-recipient" class="modal-recipient"></p>
+      <label>Type<select id="admin-message-type"><option value="warning">Warning</option><option value="alert">Alert</option><option value="info">Info</option></select></label>
+      <label>Message<textarea id="admin-message-text" maxlength="1000" required placeholder="Write the notice shown in the app…"></textarea></label>
+      <p id="admin-message-state" class="save-state" aria-live="polite"></p>
+      <button id="send-admin-message" class="button primary" type="submit">Send to app</button>
+    </form>
+  </div>
   <template id="report-template"><article class="report-row"><button class="report-select"><div class="report-row-top"><span class="priority-dot"></span><span class="report-type"></span><time></time></div><h2></h2><p class="report-excerpt"></p><div class="report-meta"><span class="reason"></span><span class="reported-name"></span></div></button></article></template>
   <script>
     window.addEventListener('error', event => {
