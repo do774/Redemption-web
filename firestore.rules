@@ -1,0 +1,106 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Administrators are managed outside the client app by updating
+    // users/{uid}.admin from the Firebase Console or trusted backend.
+    function isAdmin() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.admin == true;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function moderationFields() {
+      return [
+        "moderationStatus",
+        "moderationReason",
+        "moderationUntil",
+        "moderatedAt",
+        "moderatedBy"
+      ];
+    }
+
+    function protectedProfileFields() {
+      return [
+        "moderationStatus",
+        "moderationReason",
+        "moderationUntil",
+        "moderatedAt",
+        "moderatedBy",
+        "admin"
+      ];
+    }
+
+    match /users/{uid} {
+      allow read: if isSignedIn();
+
+      // A user may create their profile, but never create an admin profile.
+      allow create: if isOwner(uid)
+        && !request.resource.data.keys().hasAny(moderationFields())
+        && (!request.resource.data.keys().hasAny(["admin"])
+          || request.resource.data.admin == false);
+
+      // Only an existing administrator may grant/revoke admin or moderation fields.
+      allow update: if isAdmin()
+        || (
+          isOwner(uid)
+          && !request.resource.data.diff(resource.data).changedKeys()
+            .hasAny(protectedProfileFields())
+        );
+
+      allow delete: if isOwner(uid) || isAdmin();
+    }
+
+    match /reports/{reportId} {
+      allow create: if isSignedIn();
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /moderationWarnings/{warningId} {
+      allow create, read, update, delete: if isAdmin();
+
+      allow read: if isSignedIn()
+        && resource.data.recipientUID == request.auth.uid;
+
+      allow update: if isSignedIn()
+        && resource.data.recipientUID == request.auth.uid
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(["status", "readAt"])
+        && request.resource.data.status == "read";
+    }
+
+    match /posts/{postId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSignedIn() || isAdmin();
+
+      match /comments/{commentId} {
+        allow read: if isSignedIn();
+        allow create, update, delete: if isSignedIn() || isAdmin();
+      }
+    }
+
+    match /circleRequests/{requestId} {
+      allow read, create, update, delete: if isSignedIn();
+    }
+
+    match /conversations/{conversationId} {
+      allow read, create, update, delete: if isSignedIn();
+
+      match /messages/{messageId} {
+        allow read, create, update, delete: if isSignedIn();
+      }
+    }
+
+    match /deletedAccounts/{uid} {
+      allow create: if isOwner(uid);
+      allow read, update, delete: if isAdmin();
+    }
+  }
+}

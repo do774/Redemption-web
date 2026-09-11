@@ -8,7 +8,12 @@ initializeApp();
 const database = getFirestore();
 
 exports.adminDeleteAccount = onCall({ region: 'us-central1' }, async request => {
-  if (request.auth?.token?.admin !== true) {
+  if (!request.auth) {
+    throw new HttpsError('permission-denied', 'Administrator access is required.');
+  }
+
+  const adminProfile = await database.collection('users').doc(request.auth.uid).get();
+  if (!adminProfile.exists || adminProfile.data()?.admin !== true) {
     throw new HttpsError('permission-denied', 'Administrator access is required.');
   }
 
