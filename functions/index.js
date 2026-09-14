@@ -308,3 +308,33 @@ exports.adminDeletePost = onCall({ region: 'us-central1' }, async request => {
   ]);
   return { deleted: true, postID };
 });
+
+exports.adminDeleteComment = onCall({ region: 'us-central1' }, async request => {
+  await requireAdministrator(request);
+
+  const postID = String(request.data?.postID || '').trim();
+  const commentID = String(request.data?.commentID || '').trim();
+  if (!postID || !commentID) throw new HttpsError('invalid-argument', 'A post ID and comment ID are required.');
+
+  const postRef = database.collection('posts').doc(postID);
+  const commentRef = postRef.collection('comments').doc(commentID);
+  if (!(await commentRef.get()).exists) throw new HttpsError('not-found', 'The comment no longer exists.');
+
+  const comments = await postRef.collection('comments').get();
+  const idsToDelete = new Set([commentID]);
+  let foundDescendant = true;
+  while (foundDescendant) {
+    foundDescendant = false;
+    comments.docs.forEach(comment => {
+      const parentID = String(comment.data().parentCommentID || comment.data().parentID || '');
+      if (parentID && idsToDelete.has(parentID) && !idsToDelete.has(comment.id)) {
+        idsToDelete.add(comment.id);
+        foundDescendant = true;
+      }
+    });
+  }
+  await commitInBatches(comments.docs
+    .filter(comment => idsToDelete.has(comment.id))
+    .map(comment => ({ type: 'delete', ref: comment.ref })));
+  return { deleted: true, postID, commentID, deletedCount: idsToDelete.size };
+});
