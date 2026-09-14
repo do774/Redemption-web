@@ -2,6 +2,8 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { initializeApp } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
 const { FieldValue, getFirestore } = require('firebase-admin/firestore');
+const { getStorage } = require('firebase-admin/storage');
+const { randomUUID } = require('crypto');
 
 initializeApp();
 
@@ -337,4 +339,45 @@ exports.adminDeleteComment = onCall({ region: 'us-central1' }, async request => 
     .filter(comment => idsToDelete.has(comment.id))
     .map(comment => ({ type: 'delete', ref: comment.ref })));
   return { deleted: true, postID, commentID, deletedCount: idsToDelete.size };
+});
+
+exports.adminUploadOfficialImage = onCall({ region: 'us-central1' }, async request => {
+  await requireAdministrator(request);
+
+  const postID = String(request.data?.postID || '').trim();
+  const contentType = String(request.data?.contentType || '').toLowerCase();
+  const encoded = String(request.data?.base64 || '');
+  const filename = String(request.data?.filename || 'image').replace(/[^a-zA-Z0-9._-]/g, '-').slice(-90);
+  if (!postID || !encoded || !contentType.startsWith('image/')) {
+    throw new HttpsError('invalid-argument', 'A post ID and image are required.');
+  }
+  const bytes = Buffer.from(encoded, 'base64');
+  if (!bytes.length || bytes.length > 5 * 1024 * 1024) {
+    throw new HttpsError('invalid-argument', 'Images must be no larger than 5 MB.');
+  }
+  const path = `officialFeed/${postID}/${Date.now()}-${filename}`;
+  const token = randomUUID();
+  const file = getStorage().bucket().file(path);
+  await file.save(bytes, {
+    resumable: false,
+    contentType,
+    metadata: { metadata: { firebaseStorageDownloadTokens: token } },
+  });
+  const bucket = getStorage().bucket().name;
+  return {
+    path,
+    imageURL: `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(path)}?alt=media&token=${token}`,
+  };
+});
+
+exports.adminDeleteOfficialImage = onCall({ region: 'us-central1' }, async request => {
+  await requireAdministrator(request);
+  const path = String(request.data?.path || '').trim();
+  if (!path.startsWith('officialFeed/')) throw new HttpsError('invalid-argument', 'Invalid official image path.');
+  try {
+    await getStorage().bucket().file(path).delete();
+  } catch (error) {
+    if (error?.code !== 404) throw error;
+  }
+  return { deleted: true };
 });
