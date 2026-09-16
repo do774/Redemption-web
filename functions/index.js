@@ -11,7 +11,8 @@ initializeApp();
 
 const database = getFirestore();
 const openAIKey = defineSecret('OPENAI_API_KEY');
-const ENGINE_LANGUAGES = ['en', 'hr', 'de', 'es', 'fr', 'it', 'pt', 'pl'];
+// Keep generated content aligned with the languages exposed by the app UI.
+const ENGINE_LANGUAGES = ['en', 'de', 'es', 'it', 'zh', 'hr', 'cs', 'pl'];
 
 async function generateTranslations({ type, title, bodyText, options = [], explanation = '' }) {
   const apiKey = openAIKey.value();
@@ -98,6 +99,22 @@ async function replenishEvergreenContent() {
     made += 1;
   }
   return made;
+}
+
+async function backfillContentTranslations() {
+  const snapshot = await database.collection('adminFeedItems').get();
+  let updated = 0;
+  for (const item of snapshot.docs) {
+    const data = item.data() || {};
+    const existing = data.translations || {};
+    if (ENGINE_LANGUAGES.every(language => existing[language]?.title && existing[language]?.bodyText)) continue;
+    const english = existing.en || {};
+    const options = (data.poll?.options || data.pollOptions || []).map(option => option.text || '');
+    const translations = await generateTranslations({ type: data.contentType || 'QUESTION_OF_THE_DAY', title: english.title || data.adminTitle || '', bodyText: english.bodyText || data.bodyText || '', options, explanation: english.explanation || data.poll?.explanation || '' });
+    await item.ref.update({ translations: { ...existing, ...translations }, adminTitle: translations.en.title, bodyText: translations.en.bodyText, updatedAt: FieldValue.serverTimestamp() });
+    updated += 1;
+  }
+  return updated;
 }
 
 const engineTypes = ['NEWS', 'POLL', 'QUOTE', 'WHO_WILL_WIN', 'WHO_IS_BETTER', 'DEBATE', 'QUESTION_OF_THE_DAY', 'WOULD_YOU_RATHER', 'TRIVIA', 'ON_THIS_DAY', 'FACT_OF_THE_DAY', 'MORAL_DILEMMA', 'PREDICTION', 'STORY_OF_THE_DAY', 'GUESS_THE_ANSWER', 'RESULT'];
@@ -551,4 +568,10 @@ exports.adminContentPublisher = onSchedule({ schedule: '* * * * *', timeZone: 'E
 // generated content is stored with all translations before a user can see it.
 exports.adminContentEvergreenPlanner = onSchedule({ schedule: '0 2 1 * *', timeZone: 'Europe/Zagreb', timeoutSeconds: 540, secrets: [openAIKey] }, async () => {
   await replenishEvergreenContent();
+});
+
+// Existing content is upgraded only when an app language is missing, so this
+// weekly safety pass has no API cost once the library is fully localized.
+exports.adminContentTranslationBackfill = onSchedule({ schedule: '0 3 * * 0', timeZone: 'Europe/Zagreb', timeoutSeconds: 540, secrets: [openAIKey] }, async () => {
+  await backfillContentTranslations();
 });
