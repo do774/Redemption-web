@@ -135,8 +135,8 @@ const engineTypes = ['NEWS', 'POLL', 'QUOTE', 'WHO_WILL_WIN', 'WHO_IS_BETTER', '
 const fourOptionTypes = ['TRIVIA', 'GUESS_THE_ANSWER'];
 const twoOptionTypes = ['POLL', 'WHO_WILL_WIN', 'WHO_IS_BETTER', 'DEBATE', 'WOULD_YOU_RATHER', 'MORAL_DILEMMA', 'PREDICTION'];
 
-function nextEngineSlot(settings, ordinal, type) {
-  const typeTime = settings.schedules?.[type]?.time;
+function nextEngineSlot(settings, ordinal, type, timeOverride = '') {
+  const typeTime = timeOverride || settings.schedules?.[type]?.time;
   const legacySlots = Object.values(settings.slots || {}).filter(value => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value))).sort();
   const scheduledTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(typeTime)) ? typeTime : legacySlots[0] || '08:00';
   const [hour, minute] = String(scheduledTime).split(':').map(Number);
@@ -157,7 +157,7 @@ function nextEngineSlot(settings, ordinal, type) {
   return result <= now ? new Date(result.getTime() + 24 * 60 * 60 * 1000) : result;
 }
 
-async function createGeneratedContent({ type, settings = {}, ordinal = 1, schedule = false, instruction = '' }) {
+async function createGeneratedContent({ type, settings = {}, ordinal = 1, schedule = false, publishAt = null, instruction = '' }) {
   if (!engineTypes.includes(type)) throw new HttpsError('invalid-argument', 'Unsupported content type.');
   const optionCount = fourOptionTypes.includes(type) ? 4 : twoOptionTypes.includes(type) ? 2 : 0;
   const seed = instruction.trim() ? `GENERATE: ${instruction.trim()}` : evergreenSeed(type, ordinal);
@@ -165,7 +165,7 @@ async function createGeneratedContent({ type, settings = {}, ordinal = 1, schedu
   const translations = generated.translations;
   const options = Array.from({ length: optionCount }, (_, index) => ({ id: `option-${index + 1}`, text: translations.en.pollOptions[`option-${index + 1}`] || `Option ${index + 1}` }));
   const ref = database.collection('adminFeedItems').doc();
-  await ref.set({ id: ref.id, contentType: type, contentStatus: schedule ? 'SCHEDULED' : 'DRAFT', publishAt: schedule ? nextEngineSlot(settings, ordinal, type) : null, translations, adminTitle: translations.en.title, bodyText: translations.en.bodyText, kind: 'think', isAdminPost: true, sourceCollection: 'adminFeedItems', authorUID: 'content-engine', authorName: 'Redemption', authorImageURL: '', visibility: 'all', topicKey: type.toLowerCase(), aiGenerated: true, autoPublished: false, commentsEnabled: !['QUOTE', 'FACT_OF_THE_DAY', 'STORY_OF_THE_DAY', 'ON_THIS_DAY', 'RESULT'].includes(type), reactionsEnabled: optionCount === 0, poll: { enabled: optionCount > 0, options, correctOption: fourOptionTypes.includes(type) ? options[generated.correctOptionIndex]?.id || options[0]?.id || null : null, showResultsAfterVote: true, revealCorrectAnswerAfterVote: fourOptionTypes.includes(type), explanation: translations.en.explanation }, pollOptions: options, pollVotes: {}, positiveCount: 0, negativeCount: 0, positiveVoters: [], negativeVoters: [], createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+  await ref.set({ id: ref.id, contentType: type, contentStatus: schedule ? 'SCHEDULED' : 'DRAFT', publishAt: schedule ? publishAt || nextEngineSlot(settings, ordinal, type) : null, translations, adminTitle: translations.en.title, bodyText: translations.en.bodyText, kind: 'think', isAdminPost: true, sourceCollection: 'adminFeedItems', authorUID: 'content-engine', authorName: 'Redemption', authorImageURL: '', visibility: 'all', topicKey: type.toLowerCase(), aiGenerated: true, autoPublished: false, commentsEnabled: !['QUOTE', 'FACT_OF_THE_DAY', 'STORY_OF_THE_DAY', 'ON_THIS_DAY', 'RESULT'].includes(type), reactionsEnabled: optionCount === 0, poll: { enabled: optionCount > 0, options, correctOption: fourOptionTypes.includes(type) ? options[generated.correctOptionIndex]?.id || options[0]?.id || null : null, showResultsAfterVote: true, revealCorrectAnswerAfterVote: fourOptionTypes.includes(type), explanation: translations.en.explanation }, pollOptions: options, pollVotes: {}, positiveCount: 0, negativeCount: 0, positiveVoters: [], negativeVoters: [], createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
   return ref.id;
 }
 
@@ -575,6 +575,29 @@ exports.adminGenerateContent = onCall({ region: 'us-central1', secrets: [openAIK
   const settings = (await database.collection('adminContentSettings').doc('global').get()).data() || {};
   const id = await createGeneratedContent({ type, settings, instruction, schedule: false });
   return { id };
+});
+
+// The Admin AI Schedule tab explicitly creates only the entries selected by an
+// administrator. Each supplied time becomes its own scheduled post.
+exports.adminGenerateScheduledContent = onCall({ region: 'us-central1', secrets: [openAIKey], timeoutSeconds: 540 }, async request => {
+  await requireAdministrator(request);
+  const rawEntries = Array.isArray(request.data?.entries) ? request.data.entries : [];
+  const entries = rawEntries.flatMap(entry => {
+    const type = String(entry?.type || '').trim().toUpperCase();
+    if (!engineTypes.includes(type)) return [];
+    const times = Array.isArray(entry?.times) ? entry.times : [];
+    return [...new Set(times.map(time => String(time || '').trim()).filter(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(time)))].map(time => ({ type, time }));
+  }).slice(0, 16);
+  if (!entries.length) throw new HttpsError('invalid-argument', 'Select at least one content type and publishing time.');
+
+  const settings = (await database.collection('adminContentSettings').doc('global').get()).data() || {};
+  const scheduled = [];
+  for (const [index, entry] of entries.entries()) {
+    const publishAt = nextEngineSlot(settings, 1, entry.type, entry.time);
+    const id = await createGeneratedContent({ type: entry.type, settings, ordinal: index + 1, schedule: true, publishAt });
+    scheduled.push({ id, type: entry.type, time: entry.time, publishAt: publishAt.toISOString() });
+  }
+  return { scheduled };
 });
 
 // Runs independently of clients. It only advances already-reviewed scheduled
