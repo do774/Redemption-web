@@ -28,9 +28,12 @@ async function generateTranslations({ type, title, bodyText, options = [], expla
           required: ['title', 'bodyText', 'pollOptions', 'explanation'],
         }])), required: ENGINE_LANGUAGES,
       },
-    }, required: ['translations'],
+      // One canonical answer index prevents a text answer (for example,
+      // "Wolfram") being saved when it is not one of the offered choices.
+      correctOptionIndex: { type: 'integer', minimum: 0, maximum: 3 },
+    }, required: ['translations', 'correctOptionIndex'],
   };
-  const prompt = `You are the safe editorial engine for a general-audience community app. ${title.startsWith('GENERATE:') ? 'Create a fresh, specific, discussion-worthy item from the instruction below.' : 'Rewrite and translate this item.'} Avoid politics, hate, sexual content, graphic violence, self-harm, medical claims, tragedy-as-entertainment, or unsupported facts. Preserve named people, clubs and brands. Return exactly the requested translations. English title: ${title}\nEnglish body: ${bodyText}\nOptions: ${JSON.stringify(options)}\nExplanation: ${explanation}`;
+  const prompt = `You are the safe editorial engine for a general-audience community app. ${title.startsWith('GENERATE:') ? 'Create a fresh, specific, discussion-worthy item from the instruction below.' : 'Rewrite and translate this item.'} Avoid politics, hate, sexual content, graphic violence, self-harm, medical claims, tragedy-as-entertainment, or unsupported facts. Preserve named people, clubs and brands. Return exactly the requested translations. Keep every option at its original array index across all languages. For trivia and guess-the-answer, make correctOptionIndex the zero-based index of an offered answer that is factually correct; never invent an answer outside Options, and make the explanation support that exact option. For non-quiz content, use 0. English title: ${title}\nEnglish body: ${bodyText}\nOptions: ${JSON.stringify(options)}\nExplanation: ${explanation}`;
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: 'gpt-5.6-luna', reasoning: { effort: 'low' }, store: false, input: prompt, text: { format: { type: 'json_schema', name: 'content_translations', strict: true, schema } } }),
@@ -40,7 +43,18 @@ async function generateTranslations({ type, title, bodyText, options = [], expla
   const outputText = payload.output_text || payload.output
     ?.flatMap(item => item.content || [])
     .find(item => item.type === 'output_text')?.text;
-  try { return JSON.parse(outputText).translations; }
+  try {
+    const parsed = JSON.parse(outputText);
+    // The client expects translations keyed by stable option IDs. Normalising
+    // here fixes future content while the client still reads the old array
+    // format for previously generated items.
+    const translations = Object.fromEntries(ENGINE_LANGUAGES.map(language => {
+      const translation = parsed.translations[language] || {};
+      const translatedOptions = Array.isArray(translation.pollOptions) ? translation.pollOptions : [];
+      return [language, { ...translation, pollOptions: Object.fromEntries(options.map((_, index) => [`option-${index + 1}`, translatedOptions[index] || ''])) }];
+    }));
+    return { translations, correctOptionIndex: Number.isInteger(parsed.correctOptionIndex) ? parsed.correctOptionIndex : 0 };
+  }
   catch { throw new HttpsError('internal', 'Content generation returned an invalid structured response.'); }
 }
 
@@ -91,7 +105,7 @@ async function replenishEvergreenContent() {
   // Work in modest batches; Cloud Scheduler retries safely and avoids a large
   // burst of requests if an existing queue has been manually cleared.
   for (const type of evergreen) {
-    if (enabledTypes[type] === false || made >= 16) continue;
+    if (enabledTypes[type] === false || settings.schedules?.[type]?.enabled === false || made >= 16) continue;
     const existing = await database.collection('adminFeedItems').where('contentType', '==', type).get();
     const queued = existing.docs.filter(item => ['DRAFT', 'SCHEDULED'].includes(item.data()?.contentStatus));
     if (queued.length >= 20) continue;
@@ -110,7 +124,7 @@ async function backfillContentTranslations() {
     if (ENGINE_LANGUAGES.every(language => existing[language]?.title && existing[language]?.bodyText)) continue;
     const english = existing.en || {};
     const options = (data.poll?.options || data.pollOptions || []).map(option => option.text || '');
-    const translations = await generateTranslations({ type: data.contentType || 'QUESTION_OF_THE_DAY', title: english.title || data.adminTitle || '', bodyText: english.bodyText || data.bodyText || '', options, explanation: english.explanation || data.poll?.explanation || '' });
+    const { translations } = await generateTranslations({ type: data.contentType || 'QUESTION_OF_THE_DAY', title: english.title || data.adminTitle || '', bodyText: english.bodyText || data.bodyText || '', options, explanation: english.explanation || data.poll?.explanation || '' });
     await item.ref.update({ translations: { ...existing, ...translations }, adminTitle: translations.en.title, bodyText: translations.en.bodyText, updatedAt: FieldValue.serverTimestamp() });
     updated += 1;
   }
@@ -121,10 +135,14 @@ const engineTypes = ['NEWS', 'POLL', 'QUOTE', 'WHO_WILL_WIN', 'WHO_IS_BETTER', '
 const fourOptionTypes = ['TRIVIA', 'GUESS_THE_ANSWER'];
 const twoOptionTypes = ['POLL', 'WHO_WILL_WIN', 'WHO_IS_BETTER', 'DEBATE', 'WOULD_YOU_RATHER', 'MORAL_DILEMMA', 'PREDICTION'];
 
-function nextEngineSlot(settings, ordinal) {
-  const slots = Object.values(settings.slots || {}).filter(value => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value))).sort();
-  const [hour, minute] = String(slots[(Math.max(1, ordinal) - 1) % Math.max(1, slots.length)] || '08:00').split(':').map(Number);
-  const dayOffset = Math.floor((Math.max(1, ordinal) - 1) / Math.max(1, slots.length));
+function nextEngineSlot(settings, ordinal, type) {
+  const typeTime = settings.schedules?.[type]?.time;
+  const legacySlots = Object.values(settings.slots || {}).filter(value => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value))).sort();
+  const scheduledTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(typeTime)) ? typeTime : legacySlots[0] || '08:00';
+  const [hour, minute] = String(scheduledTime).split(':').map(Number);
+  // A type has one daily slot. Its queued items are placed on consecutive
+  // days instead of competing with unrelated News/Poll/etc. slots.
+  const dayOffset = Math.max(0, ordinal - 1);
   const now = new Date();
   const date = new Date(now.getTime() + dayOffset * 24 * 60 * 60 * 1000);
   // Cloud Functions run in UTC. Shift the requested Zagreb wall-clock time
@@ -143,10 +161,11 @@ async function createGeneratedContent({ type, settings = {}, ordinal = 1, schedu
   if (!engineTypes.includes(type)) throw new HttpsError('invalid-argument', 'Unsupported content type.');
   const optionCount = fourOptionTypes.includes(type) ? 4 : twoOptionTypes.includes(type) ? 2 : 0;
   const seed = instruction.trim() ? `GENERATE: ${instruction.trim()}` : evergreenSeed(type, ordinal);
-  const translations = await generateTranslations({ type, title: seed, bodyText: '', options: Array.from({ length: optionCount }, () => '') });
-  const options = Array.from({ length: optionCount }, (_, index) => ({ id: `option-${index + 1}`, text: translations.en.pollOptions[index] || `Option ${index + 1}` }));
+  const generated = await generateTranslations({ type, title: seed, bodyText: '', options: Array.from({ length: optionCount }, () => '') });
+  const translations = generated.translations;
+  const options = Array.from({ length: optionCount }, (_, index) => ({ id: `option-${index + 1}`, text: translations.en.pollOptions[`option-${index + 1}`] || `Option ${index + 1}` }));
   const ref = database.collection('adminFeedItems').doc();
-  await ref.set({ id: ref.id, contentType: type, contentStatus: schedule ? 'SCHEDULED' : 'DRAFT', publishAt: schedule ? nextEngineSlot(settings, ordinal) : null, translations, adminTitle: translations.en.title, bodyText: translations.en.bodyText, kind: 'think', isAdminPost: true, sourceCollection: 'adminFeedItems', authorUID: 'content-engine', authorName: 'Redemption', authorImageURL: '', visibility: 'all', topicKey: type.toLowerCase(), aiGenerated: true, autoPublished: false, commentsEnabled: !['QUOTE', 'FACT_OF_THE_DAY', 'STORY_OF_THE_DAY', 'ON_THIS_DAY', 'RESULT'].includes(type), reactionsEnabled: optionCount === 0, poll: { enabled: optionCount > 0, options, correctOption: fourOptionTypes.includes(type) ? 'option-1' : null, showResultsAfterVote: true, revealCorrectAnswerAfterVote: fourOptionTypes.includes(type), explanation: translations.en.explanation }, pollOptions: options, pollVotes: {}, positiveCount: 0, negativeCount: 0, positiveVoters: [], negativeVoters: [], createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+  await ref.set({ id: ref.id, contentType: type, contentStatus: schedule ? 'SCHEDULED' : 'DRAFT', publishAt: schedule ? nextEngineSlot(settings, ordinal, type) : null, translations, adminTitle: translations.en.title, bodyText: translations.en.bodyText, kind: 'think', isAdminPost: true, sourceCollection: 'adminFeedItems', authorUID: 'content-engine', authorName: 'Redemption', authorImageURL: '', visibility: 'all', topicKey: type.toLowerCase(), aiGenerated: true, autoPublished: false, commentsEnabled: !['QUOTE', 'FACT_OF_THE_DAY', 'STORY_OF_THE_DAY', 'ON_THIS_DAY', 'RESULT'].includes(type), reactionsEnabled: optionCount === 0, poll: { enabled: optionCount > 0, options, correctOption: fourOptionTypes.includes(type) ? options[generated.correctOptionIndex]?.id || options[0]?.id || null : null, showResultsAfterVote: true, revealCorrectAnswerAfterVote: fourOptionTypes.includes(type), explanation: translations.en.explanation }, pollOptions: options, pollVotes: {}, positiveCount: 0, negativeCount: 0, positiveVoters: [], negativeVoters: [], createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
   return ref.id;
 }
 
@@ -534,9 +553,9 @@ exports.adminRegenerateContent = onCall({ region: 'us-central1', secrets: [openA
   const item = source.data() || {};
   const english = item.translations?.en || {};
   const options = (item.poll?.options || item.pollOptions || []).map(option => option.text || '');
-  const translations = await generateTranslations({ type: item.contentType || 'QUESTION_OF_THE_DAY', title: english.title || item.adminTitle || '', bodyText: english.bodyText || item.bodyText || '', options, explanation: english.explanation || item.poll?.explanation || '' });
+  const { translations } = await generateTranslations({ type: item.contentType || 'QUESTION_OF_THE_DAY', title: english.title || item.adminTitle || '', bodyText: english.bodyText || item.bodyText || '', options, explanation: english.explanation || item.poll?.explanation || '' });
   const nextRef = database.collection('adminFeedItems').doc();
-  const normalizedPollOptions = (item.poll?.options || item.pollOptions || []).map((option, index) => ({ ...option, text: translations.en.pollOptions[index] || option.text }));
+  const normalizedPollOptions = (item.poll?.options || item.pollOptions || []).map((option, index) => ({ ...option, text: translations.en.pollOptions[option.id] || option.text }));
   await nextRef.set({
     ...item, id: nextRef.id, contentStatus: 'DRAFT', publishAt: null, translations,
     adminTitle: translations.en.title, bodyText: translations.en.bodyText,
@@ -566,7 +585,7 @@ exports.adminContentPublisher = onSchedule({ schedule: '* * * * *', timeZone: 'E
 
 // Monthly queue health check. Each run tops up the lowest queues in batches;
 // generated content is stored with all translations before a user can see it.
-exports.adminContentEvergreenPlanner = onSchedule({ schedule: '0 2 1 * *', timeZone: 'Europe/Zagreb', timeoutSeconds: 540, secrets: [openAIKey] }, async () => {
+exports.adminContentEvergreenPlanner = onSchedule({ schedule: '*/15 * * * *', timeZone: 'Europe/Zagreb', timeoutSeconds: 540, secrets: [openAIKey] }, async () => {
   await replenishEvergreenContent();
 });
 
