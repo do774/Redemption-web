@@ -1,4 +1,6 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { defineSecret } = require('firebase-functions/params');
 const { initializeApp } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
 const { FieldValue, getFirestore } = require('firebase-admin/firestore');
@@ -8,6 +10,128 @@ const { randomUUID } = require('crypto');
 initializeApp();
 
 const database = getFirestore();
+const openAIKey = defineSecret('OPENAI_API_KEY');
+const ENGINE_LANGUAGES = ['en', 'hr', 'de', 'es', 'fr', 'it', 'pt', 'pl'];
+
+async function generateTranslations({ type, title, bodyText, options = [], explanation = '' }) {
+  const apiKey = openAIKey.value();
+  if (!apiKey) throw new HttpsError('failed-precondition', 'OPENAI_API_KEY is not configured for the Content Engine.');
+  const schema = {
+    type: 'object', additionalProperties: false,
+    properties: {
+      translations: {
+        type: 'object', additionalProperties: false,
+        properties: Object.fromEntries(ENGINE_LANGUAGES.map(language => [language, {
+          type: 'object', additionalProperties: false,
+          properties: { title: { type: 'string' }, bodyText: { type: 'string' }, pollOptions: { type: 'array', items: { type: 'string' } }, explanation: { type: 'string' } },
+          required: ['title', 'bodyText', 'pollOptions', 'explanation'],
+        }])), required: ENGINE_LANGUAGES,
+      },
+    }, required: ['translations'],
+  };
+  const prompt = `You are the safe editorial engine for a general-audience community app. ${title.startsWith('GENERATE:') ? 'Create a fresh, specific, discussion-worthy item from the instruction below.' : 'Rewrite and translate this item.'} Avoid politics, hate, sexual content, graphic violence, self-harm, medical claims, tragedy-as-entertainment, or unsupported facts. Preserve named people, clubs and brands. Return exactly the requested translations. English title: ${title}\nEnglish body: ${bodyText}\nOptions: ${JSON.stringify(options)}\nExplanation: ${explanation}`;
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'gpt-5.6-luna', reasoning: { effort: 'low' }, store: false, input: prompt, text: { format: { type: 'json_schema', name: 'content_translations', strict: true, schema } } }),
+  });
+  if (!response.ok) throw new HttpsError('internal', `Content generation failed (${response.status}).`);
+  const payload = await response.json();
+  const outputText = payload.output_text || payload.output
+    ?.flatMap(item => item.content || [])
+    .find(item => item.type === 'output_text')?.text;
+  try { return JSON.parse(outputText).translations; }
+  catch { throw new HttpsError('internal', 'Content generation returned an invalid structured response.'); }
+}
+
+async function publishDueContent() {
+  const settings = (await database.collection('adminContentSettings').doc('global').get()).data() || {};
+  // Manual schedules must always be honoured. `autoPublish` only decides
+  // whether newly generated AI drafts enter the schedule automatically.
+  if (settings.enabled === false) return 0;
+  const now = new Date();
+  const scheduled = await database.collection('adminFeedItems').where('contentStatus', '==', 'SCHEDULED').get();
+  const due = { docs: scheduled.docs.filter(item => item.data()?.publishAt?.toDate?.() <= now), empty: scheduled.docs.every(item => item.data()?.publishAt?.toDate?.() > now), size: scheduled.docs.filter(item => item.data()?.publishAt?.toDate?.() <= now).length };
+  const batch = database.batch();
+  due.docs.forEach(item => batch.update(item.ref, { contentStatus: 'PUBLISHED', autoPublished: true, updatedAt: FieldValue.serverTimestamp() }));
+  const openPolls = await database.collection('adminFeedItems').where('contentStatus', '==', 'PUBLISHED').get();
+  openPolls.docs.filter(item => item.data()?.poll?.closeAt?.toDate?.() <= now).forEach(item => batch.update(item.ref, { contentStatus: 'LOCKED', updatedAt: FieldValue.serverTimestamp() }));
+  if (!due.empty || openPolls.size) await batch.commit();
+  return due.size;
+}
+
+function evergreenSeed(type, ordinal) {
+  const prompts = {
+    QUOTE: 'a short original, uplifting quote about everyday personal growth',
+    NEWS: 'a concise, clearly labelled sample community news update about a positive local initiative; do not present unverified real-world facts',
+    POLL: 'a light, friendly two-option poll about an everyday preference',
+    WHO_WILL_WIN: 'a playful two-option prediction question about a fictional friendly match, without claiming a real fixture exists',
+    WHO_IS_BETTER: 'a light comparison between two universally recognisable, non-political cultural or sporting figures',
+    DEBATE: 'a respectful, low-stakes statement that invites two-sided discussion',
+    QUESTION_OF_THE_DAY: 'an open-ended, friendly question that encourages comments',
+    WOULD_YOU_RATHER: 'a playful, concrete two-choice dilemma',
+    TRIVIA: 'a verified general-knowledge multiple-choice question with four options and a short explanation',
+    ON_THIS_DAY: 'a carefully worded, accurate historic "On this day" sample with a short explanation; do not invent dates or events',
+    FACT_OF_THE_DAY: 'a verified, surprising general-knowledge fact',
+    MORAL_DILEMMA: 'a safe, everyday ethical choice with two to four concrete options',
+    PREDICTION: 'a playful two-option prediction about a fictional upcoming community outcome, without claiming a real event exists',
+    STORY_OF_THE_DAY: 'a short, uplifting original micro-story about an everyday act of kindness',
+    GUESS_THE_ANSWER: 'a casual, interesting four-option estimate or knowledge question with an explanation',
+    RESULT: 'a concise, clearly labelled sample result recap for a fictional community challenge, without presenting it as a real event',
+  };
+  return prompts[type] ? `GENERATE: ${prompts[type]}. Make variation ${ordinal}.` : '';
+}
+
+async function replenishEvergreenContent() {
+  const settings = (await database.collection('adminContentSettings').doc('global').get()).data() || {};
+  if (settings.enabled === false) return 0;
+  const enabledTypes = settings.enabledTypes || {};
+  const evergreen = ['NEWS', 'POLL', 'QUOTE', 'WHO_WILL_WIN', 'WHO_IS_BETTER', 'DEBATE', 'QUESTION_OF_THE_DAY', 'WOULD_YOU_RATHER', 'TRIVIA', 'ON_THIS_DAY', 'FACT_OF_THE_DAY', 'MORAL_DILEMMA', 'PREDICTION', 'STORY_OF_THE_DAY', 'GUESS_THE_ANSWER', 'RESULT'];
+  let made = 0;
+  // Work in modest batches; Cloud Scheduler retries safely and avoids a large
+  // burst of requests if an existing queue has been manually cleared.
+  for (const type of evergreen) {
+    if (enabledTypes[type] === false || made >= 16) continue;
+    const existing = await database.collection('adminFeedItems').where('contentType', '==', type).get();
+    const queued = existing.docs.filter(item => ['DRAFT', 'SCHEDULED'].includes(item.data()?.contentStatus));
+    if (queued.length >= 20) continue;
+    await createGeneratedContent({ type, settings, ordinal: queued.length + 1, schedule: settings.autoPublish === true });
+    made += 1;
+  }
+  return made;
+}
+
+const engineTypes = ['NEWS', 'POLL', 'QUOTE', 'WHO_WILL_WIN', 'WHO_IS_BETTER', 'DEBATE', 'QUESTION_OF_THE_DAY', 'WOULD_YOU_RATHER', 'TRIVIA', 'ON_THIS_DAY', 'FACT_OF_THE_DAY', 'MORAL_DILEMMA', 'PREDICTION', 'STORY_OF_THE_DAY', 'GUESS_THE_ANSWER', 'RESULT'];
+const fourOptionTypes = ['TRIVIA', 'GUESS_THE_ANSWER'];
+const twoOptionTypes = ['POLL', 'WHO_WILL_WIN', 'WHO_IS_BETTER', 'DEBATE', 'WOULD_YOU_RATHER', 'MORAL_DILEMMA', 'PREDICTION'];
+
+function nextEngineSlot(settings, ordinal) {
+  const slots = Object.values(settings.slots || {}).filter(value => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value))).sort();
+  const [hour, minute] = String(slots[(Math.max(1, ordinal) - 1) % Math.max(1, slots.length)] || '08:00').split(':').map(Number);
+  const dayOffset = Math.floor((Math.max(1, ordinal) - 1) / Math.max(1, slots.length));
+  const now = new Date();
+  const date = new Date(now.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+  // Cloud Functions run in UTC. Shift the requested Zagreb wall-clock time
+  // into UTC so the publishing scheduler honours the time shown in Admin.
+  const zoned = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Zagreb', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+  const part = type => Number(zoned.find(item => item.type === type)?.value || 0);
+  const utcGuess = Date.UTC(part('year'), part('month') - 1, part('day'), hour, minute);
+  const local = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Zagreb', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(utcGuess));
+  const localPart = type => Number(local.find(item => item.type === type)?.value || 0);
+  const offset = Date.UTC(localPart('year'), localPart('month') - 1, localPart('day'), localPart('hour'), localPart('minute')) - utcGuess;
+  const result = new Date(utcGuess - offset);
+  return result <= now ? new Date(result.getTime() + 24 * 60 * 60 * 1000) : result;
+}
+
+async function createGeneratedContent({ type, settings = {}, ordinal = 1, schedule = false, instruction = '' }) {
+  if (!engineTypes.includes(type)) throw new HttpsError('invalid-argument', 'Unsupported content type.');
+  const optionCount = fourOptionTypes.includes(type) ? 4 : twoOptionTypes.includes(type) ? 2 : 0;
+  const seed = instruction.trim() ? `GENERATE: ${instruction.trim()}` : evergreenSeed(type, ordinal);
+  const translations = await generateTranslations({ type, title: seed, bodyText: '', options: Array.from({ length: optionCount }, () => '') });
+  const options = Array.from({ length: optionCount }, (_, index) => ({ id: `option-${index + 1}`, text: translations.en.pollOptions[index] || `Option ${index + 1}` }));
+  const ref = database.collection('adminFeedItems').doc();
+  await ref.set({ id: ref.id, contentType: type, contentStatus: schedule ? 'SCHEDULED' : 'DRAFT', publishAt: schedule ? nextEngineSlot(settings, ordinal) : null, translations, adminTitle: translations.en.title, bodyText: translations.en.bodyText, kind: 'think', isAdminPost: true, sourceCollection: 'adminFeedItems', authorUID: 'content-engine', authorName: 'Redemption', authorImageURL: '', visibility: 'all', topicKey: type.toLowerCase(), aiGenerated: true, autoPublished: false, commentsEnabled: !['QUOTE', 'FACT_OF_THE_DAY', 'STORY_OF_THE_DAY', 'ON_THIS_DAY', 'RESULT'].includes(type), reactionsEnabled: optionCount === 0, poll: { enabled: optionCount > 0, options, correctOption: fourOptionTypes.includes(type) ? 'option-1' : null, showResultsAfterVote: true, revealCorrectAnswerAfterVote: fourOptionTypes.includes(type), explanation: translations.en.explanation }, pollOptions: options, pollVotes: {}, positiveCount: 0, negativeCount: 0, positiveVoters: [], negativeVoters: [], createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+  return ref.id;
+}
 
 async function requireAdministrator(request) {
   if (!request.auth) {
@@ -380,4 +504,51 @@ exports.adminDeleteOfficialImage = onCall({ region: 'us-central1' }, async reque
     if (error?.code !== 404) throw error;
   }
   return { deleted: true };
+});
+
+// The administrator deliberately triggers regeneration from the review desk.
+// The client never receives an AI key or makes an AI request.
+exports.adminRegenerateContent = onCall({ region: 'us-central1', secrets: [openAIKey] }, async request => {
+  await requireAdministrator(request);
+  const itemID = String(request.data?.itemID || '').trim();
+  if (!itemID) throw new HttpsError('invalid-argument', 'A content item ID is required.');
+  const source = await database.collection('adminFeedItems').doc(itemID).get();
+  if (!source.exists) throw new HttpsError('not-found', 'The content item no longer exists.');
+  const item = source.data() || {};
+  const english = item.translations?.en || {};
+  const options = (item.poll?.options || item.pollOptions || []).map(option => option.text || '');
+  const translations = await generateTranslations({ type: item.contentType || 'QUESTION_OF_THE_DAY', title: english.title || item.adminTitle || '', bodyText: english.bodyText || item.bodyText || '', options, explanation: english.explanation || item.poll?.explanation || '' });
+  const nextRef = database.collection('adminFeedItems').doc();
+  const normalizedPollOptions = (item.poll?.options || item.pollOptions || []).map((option, index) => ({ ...option, text: translations.en.pollOptions[index] || option.text }));
+  await nextRef.set({
+    ...item, id: nextRef.id, contentStatus: 'DRAFT', publishAt: null, translations,
+    adminTitle: translations.en.title, bodyText: translations.en.bodyText,
+    poll: item.poll ? { ...item.poll, options: normalizedPollOptions, explanation: translations.en.explanation || item.poll.explanation } : null,
+    pollOptions: normalizedPollOptions, pollVotes: {}, positiveCount: 0, negativeCount: 0, positiveVoters: [], negativeVoters: [],
+    aiGenerated: true, regeneratedFrom: itemID, createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(), generatedBy: request.auth.uid,
+  });
+  return { id: nextRef.id };
+});
+
+// A deliberate, administrator-only action for making one preview on demand.
+// It uses the same server-side secret and validation as the automatic queue.
+exports.adminGenerateContent = onCall({ region: 'us-central1', secrets: [openAIKey], timeoutSeconds: 120 }, async request => {
+  await requireAdministrator(request);
+  const type = String(request.data?.type || '').trim().toUpperCase();
+  const instruction = String(request.data?.instruction || '').trim().slice(0, 600);
+  const settings = (await database.collection('adminContentSettings').doc('global').get()).data() || {};
+  const id = await createGeneratedContent({ type, settings, instruction, schedule: false });
+  return { id };
+});
+
+// Runs independently of clients. It only advances already-reviewed scheduled
+// content and locks voting at the configured close time.
+exports.adminContentPublisher = onSchedule({ schedule: '* * * * *', timeZone: 'Europe/Zagreb' }, async () => {
+  await publishDueContent();
+});
+
+// Monthly queue health check. Each run tops up the lowest queues in batches;
+// generated content is stored with all translations before a user can see it.
+exports.adminContentEvergreenPlanner = onSchedule({ schedule: '0 2 1 * *', timeZone: 'Europe/Zagreb', timeoutSeconds: 540, secrets: [openAIKey] }, async () => {
+  await replenishEvergreenContent();
 });
