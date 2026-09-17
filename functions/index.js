@@ -166,20 +166,33 @@ function recurringScheduleKey(type, time, publishAt) {
   return `${type}:${value('year')}-${value('month')}-${value('day')}:${time}`;
 }
 
+function zagrebWeekday(date) {
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Zagreb', weekday: 'short' }).format(date);
+  return ({ Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 })[weekday];
+}
+
+function nextEngineSlotOnSelectedDay(settings, type, time, days) {
+  const allowedDays = Array.isArray(days) && days.length ? days : [0, 1, 2, 3, 4, 5, 6];
+  let candidate = nextEngineSlot(settings, 1, type, time);
+  for (let attempt = 0; attempt < 7 && !allowedDays.includes(zagrebWeekday(candidate)); attempt += 1) candidate = new Date(candidate.getTime() + 24 * 60 * 60 * 1000);
+  return candidate;
+}
+
 async function replenishRecurringAiSchedules() {
   const settings = (await database.collection('adminContentSettings').doc('global').get()).data() || {};
   if (settings.enabled === false) return 0;
   const configured = Object.entries(settings.aiSchedules || {}).flatMap(([type, entry]) => {
     if (!engineTypes.includes(type) || entry?.enabled !== true) return [];
     const times = Array.isArray(entry.times) ? entry.times : [];
-    return [...new Set(times.filter(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(time))))].map(time => ({ type, time, includeImage: entry.includeImage === true }));
+    const days = Array.isArray(entry.days) ? [...new Set(entry.days.filter(day => Number.isInteger(day) && day >= 0 && day <= 6))] : [0, 1, 2, 3, 4, 5, 6];
+    return [...new Set(times.filter(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(time))))].map(time => ({ type, time, includeImage: entry.includeImage === true, days }));
   });
   if (!configured.length) return 0;
   const existing = await database.collection('adminFeedItems').get();
   const existingKeys = new Set(existing.docs.map(item => String(item.data()?.scheduleKey || '')).filter(Boolean));
   let made = 0;
   for (const entry of configured) {
-    const publishAt = nextEngineSlot(settings, 1, entry.type, entry.time);
+    const publishAt = nextEngineSlotOnSelectedDay(settings, entry.type, entry.time, entry.days);
     const key = recurringScheduleKey(entry.type, entry.time, publishAt);
     if (existingKeys.has(key)) continue;
     await createGeneratedContent({ type: entry.type, settings, schedule: true, publishAt, includeImage: entry.includeImage, scheduleKey: key });
@@ -640,14 +653,15 @@ exports.adminGenerateScheduledContent = onCall({ region: 'us-central1', secrets:
     const type = String(entry?.type || '').trim().toUpperCase();
     if (!engineTypes.includes(type)) return [];
     const times = Array.isArray(entry?.times) ? entry.times : [];
-    return [...new Set(times.map(time => String(time || '').trim()).filter(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(time)))].map(time => ({ type, time, includeImage: entry?.includeImage === true }));
+    const days = Array.isArray(entry?.days) ? [...new Set(entry.days.filter(day => Number.isInteger(day) && day >= 0 && day <= 6))] : [0, 1, 2, 3, 4, 5, 6];
+    return [...new Set(times.map(time => String(time || '').trim()).filter(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(time)))].map(time => ({ type, time, includeImage: entry?.includeImage === true, days }));
   }).slice(0, 16);
   if (!entries.length) throw new HttpsError('invalid-argument', 'Select at least one content type and publishing time.');
 
   const settings = (await database.collection('adminContentSettings').doc('global').get()).data() || {};
   const scheduled = [];
   for (const [index, entry] of entries.entries()) {
-    const publishAt = nextEngineSlot(settings, 1, entry.type, entry.time);
+    const publishAt = nextEngineSlotOnSelectedDay(settings, entry.type, entry.time, entry.days);
     const scheduleKey = recurringScheduleKey(entry.type, entry.time, publishAt);
     const id = await createGeneratedContent({ type: entry.type, settings, ordinal: index + 1, schedule: true, publishAt, includeImage: entry.includeImage, scheduleKey });
     scheduled.push({ id, type: entry.type, time: entry.time, publishAt: publishAt.toISOString() });
