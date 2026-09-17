@@ -98,7 +98,10 @@ function evergreenSeed(type, ordinal) {
 
 async function replenishEvergreenContent() {
   const settings = (await database.collection('adminContentSettings').doc('global').get()).data() || {};
-  if (settings.enabled === false) return 0;
+  // The legacy queue is opt-in. The AI Schedule tab is the canonical source
+  // for ongoing generation, so it never creates unwanted drafts for types
+  // the administrator did not explicitly schedule.
+  if (settings.enabled === false || settings.autoPublish !== true) return 0;
   const enabledTypes = settings.enabledTypes || {};
   const evergreen = ['NEWS', 'POLL', 'QUOTE', 'WHO_WILL_WIN', 'WHO_IS_BETTER', 'DEBATE', 'QUESTION_OF_THE_DAY', 'WOULD_YOU_RATHER', 'TRIVIA', 'ON_THIS_DAY', 'FACT_OF_THE_DAY', 'MORAL_DILEMMA', 'PREDICTION', 'STORY_OF_THE_DAY', 'GUESS_THE_ANSWER', 'RESULT'];
   let made = 0;
@@ -157,7 +160,53 @@ function nextEngineSlot(settings, ordinal, type, timeOverride = '') {
   return result <= now ? new Date(result.getTime() + 24 * 60 * 60 * 1000) : result;
 }
 
-async function createGeneratedContent({ type, settings = {}, ordinal = 1, schedule = false, publishAt = null, instruction = '' }) {
+function recurringScheduleKey(type, time, publishAt) {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Zagreb', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(publishAt);
+  const value = key => parts.find(part => part.type === key)?.value || '';
+  return `${type}:${value('year')}-${value('month')}-${value('day')}:${time}`;
+}
+
+async function replenishRecurringAiSchedules() {
+  const settings = (await database.collection('adminContentSettings').doc('global').get()).data() || {};
+  if (settings.enabled === false) return 0;
+  const configured = Object.entries(settings.aiSchedules || {}).flatMap(([type, entry]) => {
+    if (!engineTypes.includes(type) || entry?.enabled !== true) return [];
+    const times = Array.isArray(entry.times) ? entry.times : [];
+    return [...new Set(times.filter(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(time))))].map(time => ({ type, time, includeImage: entry.includeImage === true }));
+  });
+  if (!configured.length) return 0;
+  const existing = await database.collection('adminFeedItems').get();
+  const existingKeys = new Set(existing.docs.map(item => String(item.data()?.scheduleKey || '')).filter(Boolean));
+  let made = 0;
+  for (const entry of configured) {
+    const publishAt = nextEngineSlot(settings, 1, entry.type, entry.time);
+    const key = recurringScheduleKey(entry.type, entry.time, publishAt);
+    if (existingKeys.has(key)) continue;
+    await createGeneratedContent({ type: entry.type, settings, schedule: true, publishAt, includeImage: entry.includeImage, scheduleKey: key });
+    existingKeys.add(key);
+    made += 1;
+  }
+  return made;
+}
+
+async function generateContentImage(title, bodyText, type, postID) {
+  const response = await fetch('https://api.openai.com/v1/images/generations', {
+    method: 'POST', headers: { Authorization: `Bearer ${openAIKey.value()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'gpt-image-1', prompt: `Create a tasteful, original editorial illustration for a general-audience community ${type.toLowerCase().replaceAll('_', ' ')} post. No words, letters, logos, watermarks, celebrities, or unsafe content. Topic: ${title}. Context: ${bodyText}`.slice(0, 3000), size: '1024x1024', quality: 'low', output_format: 'jpeg' }),
+  });
+  if (!response.ok) throw new Error(`Image generation failed (${response.status}).`);
+  const payload = await response.json();
+  const base64 = payload?.data?.[0]?.b64_json;
+  if (!base64) throw new Error('Image generation returned no image.');
+  const path = `officialFeed/${postID}/ai-${Date.now()}.jpg`;
+  const token = randomUUID();
+  const file = getStorage().bucket().file(path);
+  await file.save(Buffer.from(base64, 'base64'), { resumable: false, contentType: 'image/jpeg', metadata: { metadata: { firebaseStorageDownloadTokens: token } } });
+  const bucket = getStorage().bucket().name;
+  return { path, imageURL: `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(path)}?alt=media&token=${token}` };
+}
+
+async function createGeneratedContent({ type, settings = {}, ordinal = 1, schedule = false, publishAt = null, instruction = '', includeImage = false, scheduleKey = '' }) {
   if (!engineTypes.includes(type)) throw new HttpsError('invalid-argument', 'Unsupported content type.');
   const optionCount = fourOptionTypes.includes(type) ? 4 : twoOptionTypes.includes(type) ? 2 : 0;
   const seed = instruction.trim() ? `GENERATE: ${instruction.trim()}` : evergreenSeed(type, ordinal);
@@ -165,7 +214,12 @@ async function createGeneratedContent({ type, settings = {}, ordinal = 1, schedu
   const translations = generated.translations;
   const options = Array.from({ length: optionCount }, (_, index) => ({ id: `option-${index + 1}`, text: translations.en.pollOptions[`option-${index + 1}`] || `Option ${index + 1}` }));
   const ref = database.collection('adminFeedItems').doc();
-  await ref.set({ id: ref.id, contentType: type, contentStatus: schedule ? 'SCHEDULED' : 'DRAFT', publishAt: schedule ? publishAt || nextEngineSlot(settings, ordinal, type) : null, translations, adminTitle: translations.en.title, bodyText: translations.en.bodyText, kind: 'think', isAdminPost: true, sourceCollection: 'adminFeedItems', authorUID: 'content-engine', authorName: 'Redemption', authorImageURL: '', visibility: 'all', topicKey: type.toLowerCase(), aiGenerated: true, autoPublished: false, commentsEnabled: !['QUOTE', 'FACT_OF_THE_DAY', 'STORY_OF_THE_DAY', 'ON_THIS_DAY', 'RESULT'].includes(type), reactionsEnabled: optionCount === 0, poll: { enabled: optionCount > 0, options, correctOption: fourOptionTypes.includes(type) ? options[generated.correctOptionIndex]?.id || options[0]?.id || null : null, showResultsAfterVote: true, revealCorrectAnswerAfterVote: fourOptionTypes.includes(type), explanation: translations.en.explanation }, pollOptions: options, pollVotes: {}, positiveCount: 0, negativeCount: 0, positiveVoters: [], negativeVoters: [], createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+  let image = { path: '', imageURL: '' };
+  if (includeImage) {
+    try { image = await generateContentImage(translations.en.title, translations.en.bodyText, type, ref.id); }
+    catch (error) { console.error('Optional AI image failed', error); }
+  }
+  await ref.set({ id: ref.id, contentType: type, contentStatus: schedule ? 'SCHEDULED' : 'DRAFT', publishAt: schedule ? publishAt || nextEngineSlot(settings, ordinal, type) : null, scheduleKey: scheduleKey || null, translations, adminTitle: translations.en.title, bodyText: translations.en.bodyText, adminImageURL: image.imageURL, adminImagePath: image.path, kind: 'think', isAdminPost: true, sourceCollection: 'adminFeedItems', authorUID: 'content-engine', authorName: 'Redemption', authorImageURL: '', visibility: 'all', topicKey: type.toLowerCase(), aiGenerated: true, autoPublished: false, commentsEnabled: !['QUOTE', 'FACT_OF_THE_DAY', 'STORY_OF_THE_DAY', 'ON_THIS_DAY', 'RESULT'].includes(type), reactionsEnabled: optionCount === 0, poll: { enabled: optionCount > 0, options, correctOption: fourOptionTypes.includes(type) ? options[generated.correctOptionIndex]?.id || options[0]?.id || null : null, showResultsAfterVote: true, revealCorrectAnswerAfterVote: fourOptionTypes.includes(type), explanation: translations.en.explanation }, pollOptions: options, pollVotes: {}, positiveCount: 0, negativeCount: 0, positiveVoters: [], negativeVoters: [], createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
   return ref.id;
 }
 
@@ -586,7 +640,7 @@ exports.adminGenerateScheduledContent = onCall({ region: 'us-central1', secrets:
     const type = String(entry?.type || '').trim().toUpperCase();
     if (!engineTypes.includes(type)) return [];
     const times = Array.isArray(entry?.times) ? entry.times : [];
-    return [...new Set(times.map(time => String(time || '').trim()).filter(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(time)))].map(time => ({ type, time }));
+    return [...new Set(times.map(time => String(time || '').trim()).filter(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(time)))].map(time => ({ type, time, includeImage: entry?.includeImage === true }));
   }).slice(0, 16);
   if (!entries.length) throw new HttpsError('invalid-argument', 'Select at least one content type and publishing time.');
 
@@ -594,7 +648,8 @@ exports.adminGenerateScheduledContent = onCall({ region: 'us-central1', secrets:
   const scheduled = [];
   for (const [index, entry] of entries.entries()) {
     const publishAt = nextEngineSlot(settings, 1, entry.type, entry.time);
-    const id = await createGeneratedContent({ type: entry.type, settings, ordinal: index + 1, schedule: true, publishAt });
+    const scheduleKey = recurringScheduleKey(entry.type, entry.time, publishAt);
+    const id = await createGeneratedContent({ type: entry.type, settings, ordinal: index + 1, schedule: true, publishAt, includeImage: entry.includeImage, scheduleKey });
     scheduled.push({ id, type: entry.type, time: entry.time, publishAt: publishAt.toISOString() });
   }
   return { scheduled };
@@ -609,6 +664,7 @@ exports.adminContentPublisher = onSchedule({ schedule: '* * * * *', timeZone: 'E
 // Monthly queue health check. Each run tops up the lowest queues in batches;
 // generated content is stored with all translations before a user can see it.
 exports.adminContentEvergreenPlanner = onSchedule({ schedule: '*/15 * * * *', timeZone: 'Europe/Zagreb', timeoutSeconds: 540, secrets: [openAIKey] }, async () => {
+  await replenishRecurringAiSchedules();
   await replenishEvergreenContent();
 });
 
