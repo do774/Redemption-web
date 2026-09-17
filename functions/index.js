@@ -525,9 +525,10 @@ exports.adminDeletePost = onCall({ region: 'us-central1' }, async request => {
   await requireAdministrator(request);
 
   const postID = String(request.data?.postID || '').trim();
+  const sourceCollection = request.data?.sourceCollection === 'adminFeedItems' ? 'adminFeedItems' : 'posts';
   if (!postID) throw new HttpsError('invalid-argument', 'A post ID is required.');
 
-  const postRef = database.collection('posts').doc(postID);
+  const postRef = database.collection(sourceCollection).doc(postID);
   const post = await postRef.get();
   if (!post.exists) throw new HttpsError('not-found', 'The post no longer exists.');
 
@@ -536,7 +537,7 @@ exports.adminDeletePost = onCall({ region: 'us-central1' }, async request => {
     ...comments.docs.map(comment => ({ type: 'delete', ref: comment.ref })),
     { type: 'delete', ref: postRef },
   ]);
-  return { deleted: true, postID };
+  return { deleted: true, postID, sourceCollection };
 });
 
 exports.adminDeleteComment = onCall({ region: 'us-central1' }, async request => {
@@ -544,9 +545,10 @@ exports.adminDeleteComment = onCall({ region: 'us-central1' }, async request => 
 
   const postID = String(request.data?.postID || '').trim();
   const commentID = String(request.data?.commentID || '').trim();
+  const sourceCollection = request.data?.sourceCollection === 'adminFeedItems' ? 'adminFeedItems' : 'posts';
   if (!postID || !commentID) throw new HttpsError('invalid-argument', 'A post ID and comment ID are required.');
 
-  const postRef = database.collection('posts').doc(postID);
+  const postRef = database.collection(sourceCollection).doc(postID);
   const commentRef = postRef.collection('comments').doc(commentID);
   if (!(await commentRef.get()).exists) throw new HttpsError('not-found', 'The comment no longer exists.');
 
@@ -566,7 +568,7 @@ exports.adminDeleteComment = onCall({ region: 'us-central1' }, async request => 
   await commitInBatches(comments.docs
     .filter(comment => idsToDelete.has(comment.id))
     .map(comment => ({ type: 'delete', ref: comment.ref })));
-  return { deleted: true, postID, commentID, deletedCount: idsToDelete.size };
+  return { deleted: true, postID, commentID, deletedCount: idsToDelete.size, sourceCollection };
 });
 
 exports.adminUploadOfficialImage = onCall({ region: 'us-central1' }, async request => {
