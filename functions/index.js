@@ -14,7 +14,16 @@ const openAIKey = defineSecret('OPENAI_API_KEY');
 // Keep generated content aligned with the languages exposed by the app UI.
 const ENGINE_LANGUAGES = ['en', 'de', 'es', 'it', 'zh', 'hr', 'cs', 'pl'];
 
-async function generateTranslations({ type, title, bodyText, options = [], explanation = '' }) {
+function cleanGeneratedCopy(value) {
+  let copy = String(value || '').trim();
+  // Model instructions must never leak into reader-facing copy. This also
+  // cleans legacy-style labels if a model returns one despite the schema.
+  copy = copy.replace(/^(?:(?:generate(?:d|d content| content)?|generation|example|sample|variant|variation|varijanta|primjer|naslov|title|tekst|text|body)\s*\d*\s*[:\-–—]\s*)+/i, '');
+  copy = copy.replace(/^(?:(?:variant|variation|varijanta|primjer|example|sample)\s*\d+\s*[.\-–—:]?\s*)+/i, '');
+  return copy.trim();
+}
+
+async function generateTranslations({ type, title, bodyText, options = [], explanation = '', generationInstruction = '' }) {
   const apiKey = openAIKey.value();
   if (!apiKey) throw new HttpsError('failed-precondition', 'OPENAI_API_KEY is not configured for the Content Engine.');
   const schema = {
@@ -33,7 +42,8 @@ async function generateTranslations({ type, title, bodyText, options = [], expla
       correctOptionIndex: { type: 'integer', minimum: 0, maximum: 3 },
     }, required: ['translations', 'correctOptionIndex'],
   };
-  const prompt = `You are the safe editorial engine for a general-audience community app. ${title.startsWith('GENERATE:') ? 'Create a fresh, specific, discussion-worthy item from the instruction below.' : 'Rewrite and translate this item.'} Avoid politics, hate, sexual content, graphic violence, self-harm, medical claims, tragedy-as-entertainment, or unsupported facts. Preserve named people, clubs and brands. Return exactly the requested translations. Keep every option at its original array index across all languages. For trivia and guess-the-answer, make correctOptionIndex the zero-based index of an offered answer that is factually correct; never invent an answer outside Options, and make the explanation support that exact option. For non-quiz content, use 0. English title: ${title}\nEnglish body: ${bodyText}\nOptions: ${JSON.stringify(options)}\nExplanation: ${explanation}`;
+  const isNewContent = Boolean(generationInstruction.trim());
+  const prompt = `You are the safe editorial engine for a general-audience community app. ${isNewContent ? 'Create one fresh, specific, discussion-worthy item using the internal direction below.' : 'Rewrite and translate this item.'} Avoid politics, hate, sexual content, graphic violence, self-harm, medical claims, tragedy-as-entertainment, or unsupported facts. Preserve named people, clubs and brands. The title and body are reader-facing copy: write a natural standalone title and normal body text only. Never include labels or meta language such as "Generate", "Generated", "Example", "Sample", "Variant", "Variation", "Primjer", "Varijanta", "Title", "Body", prompt wording, or numbering. Do not mention AI, instructions, generation, or translation. Return exactly the requested translations. Keep every option at its original array index across all languages. For trivia and guess-the-answer, make correctOptionIndex the zero-based index of an offered answer that is factually correct; never invent an answer outside Options, and make the explanation support that exact option. For non-quiz content, use 0. Internal direction (never repeat it): ${generationInstruction}\nEnglish title: ${title}\nEnglish body: ${bodyText}\nOptions: ${JSON.stringify(options)}\nExplanation: ${explanation}`;
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: 'gpt-5.6-luna', reasoning: { effort: 'low' }, store: false, input: prompt, text: { format: { type: 'json_schema', name: 'content_translations', strict: true, schema } } }),
@@ -51,7 +61,13 @@ async function generateTranslations({ type, title, bodyText, options = [], expla
     const translations = Object.fromEntries(ENGINE_LANGUAGES.map(language => {
       const translation = parsed.translations[language] || {};
       const translatedOptions = Array.isArray(translation.pollOptions) ? translation.pollOptions : [];
-      return [language, { ...translation, pollOptions: Object.fromEntries(options.map((_, index) => [`option-${index + 1}`, translatedOptions[index] || ''])) }];
+      return [language, {
+        ...translation,
+        title: cleanGeneratedCopy(translation.title),
+        bodyText: cleanGeneratedCopy(translation.bodyText),
+        explanation: cleanGeneratedCopy(translation.explanation),
+        pollOptions: Object.fromEntries(options.map((_, index) => [`option-${index + 1}`, cleanGeneratedCopy(translatedOptions[index])])),
+      }];
     }));
     return { translations, correctOptionIndex: Number.isInteger(parsed.correctOptionIndex) ? parsed.correctOptionIndex : 0 };
   }
@@ -77,7 +93,7 @@ async function publishDueContent() {
 function evergreenSeed(type, ordinal) {
   const prompts = {
     QUOTE: 'a short original, uplifting quote about everyday personal growth',
-    NEWS: 'a concise, clearly labelled sample community news update about a positive local initiative; do not present unverified real-world facts',
+    NEWS: 'a concise community news update about a positive local initiative; do not present unsupported real-world facts',
     POLL: 'a light, friendly two-option poll about an everyday preference',
     WHO_WILL_WIN: 'a playful two-option prediction question about a fictional friendly match, without claiming a real fixture exists',
     WHO_IS_BETTER: 'a light comparison between two universally recognisable, non-political cultural or sporting figures',
@@ -85,15 +101,15 @@ function evergreenSeed(type, ordinal) {
     QUESTION_OF_THE_DAY: 'an open-ended, friendly question that encourages comments',
     WOULD_YOU_RATHER: 'a playful, concrete two-choice dilemma',
     TRIVIA: 'a verified general-knowledge multiple-choice question with four options and a short explanation',
-    ON_THIS_DAY: 'a carefully worded, accurate historic "On this day" sample with a short explanation; do not invent dates or events',
+    ON_THIS_DAY: 'a carefully worded, accurate historic "On this day" item with a short explanation; do not invent dates or events',
     FACT_OF_THE_DAY: 'a verified, surprising general-knowledge fact',
     MORAL_DILEMMA: 'a safe, everyday ethical choice with two to four concrete options',
     PREDICTION: 'a playful two-option prediction about a fictional upcoming community outcome, without claiming a real event exists',
     STORY_OF_THE_DAY: 'a short, uplifting original micro-story about an everyday act of kindness',
     GUESS_THE_ANSWER: 'a casual, interesting four-option estimate or knowledge question with an explanation',
-    RESULT: 'a concise, clearly labelled sample result recap for a fictional community challenge, without presenting it as a real event',
+    RESULT: 'a concise result recap for a fictional community challenge, without presenting it as a real event',
   };
-  return prompts[type] ? `GENERATE: ${prompts[type]}. Make variation ${ordinal}.` : '';
+  return prompts[type] ? `${prompts[type]}. Use a distinct angle for internal sequence ${ordinal}.` : '';
 }
 
 async function replenishEvergreenContent() {
@@ -223,8 +239,8 @@ async function generateContentImage(title, bodyText, type, postID) {
 async function createGeneratedContent({ type, settings = {}, ordinal = 1, schedule = false, publishAt = null, instruction = '', includeImage = false, scheduleKey = '' }) {
   if (!engineTypes.includes(type)) throw new HttpsError('invalid-argument', 'Unsupported content type.');
   const optionCount = fourOptionTypes.includes(type) ? 4 : twoOptionTypes.includes(type) ? 2 : 0;
-  const seed = instruction.trim() ? `GENERATE: ${instruction.trim()}` : evergreenSeed(type, ordinal);
-  const generated = await generateTranslations({ type, title: seed, bodyText: '', options: Array.from({ length: optionCount }, () => '') });
+  const generationInstruction = instruction.trim() || evergreenSeed(type, ordinal);
+  const generated = await generateTranslations({ type, title: '', bodyText: '', options: Array.from({ length: optionCount }, () => ''), generationInstruction });
   const translations = generated.translations;
   const options = Array.from({ length: optionCount }, (_, index) => ({ id: `option-${index + 1}`, text: translations.en.pollOptions[`option-${index + 1}`] || `Option ${index + 1}` }));
   const ref = database.collection('adminFeedItems').doc();
