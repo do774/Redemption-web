@@ -185,6 +185,7 @@ async function replenishRecurringAiSchedules() {
     if (!engineTypes.includes(type) || entry?.enabled !== true) return [];
     const times = Array.isArray(entry.times) ? entry.times : [];
     const days = Array.isArray(entry.days) ? [...new Set(entry.days.filter(day => Number.isInteger(day) && day >= 0 && day <= 6))] : [0, 1, 2, 3, 4, 5, 6];
+    if (!days.length) return [];
     return [...new Set(times.filter(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(time))))].map(time => ({ type, time, includeImage: entry.includeImage === true, days }));
   });
   if (!configured.length) return 0;
@@ -654,6 +655,7 @@ exports.adminGenerateScheduledContent = onCall({ region: 'us-central1', secrets:
     if (!engineTypes.includes(type)) return [];
     const times = Array.isArray(entry?.times) ? entry.times : [];
     const days = Array.isArray(entry?.days) ? [...new Set(entry.days.filter(day => Number.isInteger(day) && day >= 0 && day <= 6))] : [0, 1, 2, 3, 4, 5, 6];
+    if (!days.length) return [];
     return [...new Set(times.map(time => String(time || '').trim()).filter(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(time)))].map(time => ({ type, time, includeImage: entry?.includeImage === true, days }));
   }).slice(0, 16);
   if (!entries.length) throw new HttpsError('invalid-argument', 'Select at least one content type and publishing time.');
