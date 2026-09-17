@@ -154,7 +154,7 @@ const engineTypes = ['NEWS', 'POLL', 'QUOTE', 'WHO_WILL_WIN', 'WHO_IS_BETTER', '
 const fourOptionTypes = ['TRIVIA', 'GUESS_THE_ANSWER'];
 const twoOptionTypes = ['POLL', 'WHO_WILL_WIN', 'WHO_IS_BETTER', 'DEBATE', 'WOULD_YOU_RATHER', 'MORAL_DILEMMA', 'PREDICTION'];
 
-function nextEngineSlot(settings, ordinal, type, timeOverride = '') {
+function nextEngineSlot(settings, ordinal, type, timeOverride = '', referenceTime = new Date()) {
   const typeTime = timeOverride || settings.schedules?.[type]?.time;
   const legacySlots = Object.values(settings.slots || {}).filter(value => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value))).sort();
   const scheduledTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(typeTime)) ? typeTime : legacySlots[0] || '08:00';
@@ -162,7 +162,7 @@ function nextEngineSlot(settings, ordinal, type, timeOverride = '') {
   // A type has one daily slot. Its queued items are placed on consecutive
   // days instead of competing with unrelated News/Poll/etc. slots.
   const dayOffset = Math.max(0, ordinal - 1);
-  const now = new Date();
+  const now = referenceTime;
   const date = new Date(now.getTime() + dayOffset * 24 * 60 * 60 * 1000);
   // Cloud Functions run in UTC. Shift the requested Zagreb wall-clock time
   // into UTC so the publishing scheduler honours the time shown in Admin.
@@ -187,9 +187,9 @@ function zagrebWeekday(date) {
   return ({ Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 })[weekday];
 }
 
-function nextEngineSlotOnSelectedDay(settings, type, time, days) {
+function nextEngineSlotOnSelectedDay(settings, type, time, days, referenceTime = new Date()) {
   const allowedDays = Array.isArray(days) && days.length ? days : [0, 1, 2, 3, 4, 5, 6];
-  let candidate = nextEngineSlot(settings, 1, type, time);
+  let candidate = nextEngineSlot(settings, 1, type, time, referenceTime);
   for (let attempt = 0; attempt < 7 && !allowedDays.includes(zagrebWeekday(candidate)); attempt += 1) candidate = new Date(candidate.getTime() + 24 * 60 * 60 * 1000);
   return candidate;
 }
@@ -690,8 +690,12 @@ exports.adminGenerateScheduledContent = onCall({ region: 'us-central1', secrets:
 
   const settings = (await database.collection('adminContentSettings').doc('global').get()).data() || {};
   const scheduled = [];
+  // Generating a full schedule can take several minutes. Resolve all target
+  // slots at the instant the administrator clicks Generate, so later entries
+  // do not silently roll over to tomorrow while earlier entries publish today.
+  const schedulingStartedAt = new Date();
   for (const [index, entry] of entries.entries()) {
-    const publishAt = nextEngineSlotOnSelectedDay(settings, entry.type, entry.time, entry.days);
+    const publishAt = nextEngineSlotOnSelectedDay(settings, entry.type, entry.time, entry.days, schedulingStartedAt);
     const scheduleKey = recurringScheduleKey(entry.type, entry.time, publishAt);
     const id = await createGeneratedContent({ type: entry.type, settings, ordinal: index + 1, schedule: true, publishAt, includeImage: entry.includeImage, scheduleKey });
     scheduled.push({ id, type: entry.type, time: entry.time, publishAt: publishAt.toISOString() });
