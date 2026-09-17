@@ -220,9 +220,19 @@ async function replenishRecurringAiSchedules() {
 }
 
 async function generateContentImage(title, bodyText, type, postID) {
+  const visualDirection = {
+    NEWS: 'Use a credible editorial photograph style for the specific subject, but do not imply that an invented event is real.',
+    POLL: 'Use a warm, inviting lifestyle image that makes the two-choice topic immediately understandable.',
+    TRIVIA: 'Use a focused educational editorial illustration of the subject, never a graphic containing the answer.',
+    FACT_OF_THE_DAY: 'Use a clear, visually informative editorial illustration of the fact’s real subject.',
+    ON_THIS_DAY: 'Use a respectful archival-inspired editorial illustration; do not fabricate a historical photograph.',
+    MORAL_DILEMMA: 'Use a subtle, everyday scene that conveys the decision without judging either choice.',
+    WOULD_YOU_RATHER: 'Use a playful but polished editorial illustration of the actual alternatives.',
+    QUESTION_OF_THE_DAY: 'Use a natural, human-centred editorial image related directly to the question.',
+  }[type] || 'Choose the most natural treatment: a credible editorial photograph style for concrete real-world subjects, or a polished editorial illustration when that communicates the topic more clearly.';
   const response = await fetch('https://api.openai.com/v1/images/generations', {
     method: 'POST', headers: { Authorization: `Bearer ${openAIKey.value()}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'gpt-image-1', prompt: `Create a tasteful, original editorial illustration for a general-audience community ${type.toLowerCase().replaceAll('_', ' ')} post. No words, letters, logos, watermarks, celebrities, or unsafe content. Topic: ${title}. Context: ${bodyText}`.slice(0, 3000), size: '1024x1024', quality: 'low', output_format: 'jpeg' }),
+    body: JSON.stringify({ model: 'gpt-image-1', prompt: `Create one original, high-quality visual for a general-audience community ${type.toLowerCase().replaceAll('_', ' ')} post. It must be immediately and specifically relevant to the title and context, showing the main subject or action rather than a generic glow, abstract background, stock-style people, or unrelated decoration. ${visualDirection} Keep the composition clean enough for a feed card. No words, letters, numbers, logos, watermarks, UI, celebrities, unsafe content, or misleading factual claims. Title: ${title}. Context: ${bodyText}`.slice(0, 3000), size: '1024x1024', quality: 'low', output_format: 'jpeg' }),
   });
   if (!response.ok) throw new Error(`Image generation failed (${response.status}).`);
   const payload = await response.json();
